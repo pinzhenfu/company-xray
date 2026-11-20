@@ -112,43 +112,154 @@ async def search_stocks(query: str, limit: int = 10) -> list[dict]:
     return (starts + contains)[:limit]
 
 
-# ---------------------------------------------------------------- 新聞：Google 新聞 RSS
-async def google_news(name: str, code: str, days: int) -> tuple[list[dict], str | None]:
-    query = f'"{name}" when:{days}d' if name != code else f"{code} 股票 when:{days}d"
-    url = (
-        "https://news.google.com/rss/search?q=" + quote(query)
-        + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    )
-    try:
-        async with client() as c:
-            r = await c.get(url)
-            r.raise_for_status()
-        root = ET.fromstring(r.content)
-    except Exception as e:
-        return [], f"Google 新聞：{type(e).__name__}"
+# ---------------------------------------------------------------- 知名媒體白名單
+MEDIA = json.loads((Path(__file__).parent / "site" / "media.json").read_text(encoding="utf-8"))
+FINANCE_SITES = ["money.udn.com", "ctee.com.tw", "news.cnyes.com", "moneydj.com", "cna.com.tw",
+                 "ltn.com.tw", "wealth.com.tw", "businesstoday.com.tw", "digitimes.com", "technews.tw"]
+
+
+def canon(source: str, url: str = "") -> tuple[str, str] | None:
+    """把來源名稱對應到白名單媒體 → (正式名稱, 類別)；不在白名單回傳 None。"""
+    text = f"{source} {url}"
+    for name, group, keys in MEDIA:
+        if any(k.lower() in text.lower() for k in keys):
+            return name, group
+    return None
+
+
+def _parse_rss(content: bytes, prefix: str, default_source: str = "") -> list[dict]:
+    root = ET.fromstring(content)
     out = []
     for item in root.iter("item"):
         title = _clean(item.findtext("title"))
+        link = item.findtext("link") or ""
         src_el = item.find("source")
-        source = _clean(src_el.text) if src_el is not None else "Google 新聞"
+        source = _clean(src_el.text) if src_el is not None else default_source
+        src_url = src_el.get("url", "") if src_el is not None else link
         if source and title.endswith(" - " + source):
             title = title[: -len(" - " + source)]
         try:
             dt = email.utils.parsedate_to_datetime(item.findtext("pubDate")).astimezone(TW)
         except Exception:
             continue
+        m = canon(source, src_url)
+        if not m or not title:
+            continue
         out.append({
-            "id": _id("g", item.findtext("link") or title),
-            "title": title,
-            "url": item.findtext("link"),
-            "source": source,
-            "channel": "新聞",
-            "date": dt.isoformat(),
-            "summary": "",
-            "views": None,
-            "push": None,
+            "id": _id(prefix, link or title), "title": title, "url": link,
+            "source": m[0], "channel": m[1], "date": dt.isoformat(),
+            "summary": _clean(item.findtext("description"))[:160] if prefix == "y" else "",
+            "views": None, "push": None,
         })
-    return out, None
+    return out
+
+
+# ---------------------------------------------------------------- 新聞：Google 新聞 RSS（只留白名單媒體）
+async def google_news(name: str, code: str, days: int) -> tuple[list[dict], str | None]:
+    base = f'"{name}"' if name != code else f"{code} 股票"
+    queries = [
+        f"{base} when:{days}d",
+        f"{base} ({' OR '.join('site:' + s for s in FINANCE_SITES)}) when:{days}d",
+    ]
+    out, err = [], None
+    async with client() as c:
+        for q in queries:
+            try:
+                r = await c.get("https://news.google.com/rss/search?q=" + quote(q) + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+                r.raise_for_status()
+                out += _parse_rss(r.content, "g")
+            except Exception as e:
+                err = f"Google 新聞：{type(e).__name__}"
+    return out, (err if not out else None)
+
+
+# ---------------------------------------------------------------- 新聞：Yahoo 股市個股新聞 RSS
+async def yahoo_news(code: str, days: int) -> tuple[list[dict], str | None]:
+    since = (datetime.now(TW) - timedelta(days=days)).isoformat()
+    async with client() as c:
+        for sym in (f"{code}.TW", f"{code}.TWO", code):
+            try:
+                r = await c.get(f"https://tw.stock.yahoo.com/rss?s={sym}")
+                if r.status_code != 200 or b"<item>" not in r.content:
+                    continue
+                items = [a for a in _parse_rss(r.content, "y", "Yahoo股市") if a["date"] >= since]
+                if items:
+                    return items, None
+            except Exception:
+                continue
+    return [], "Yahoo 股市：無法取得"
+
+
+# ---------------------------------------------------------------- 文章內文（用來找判斷依據句）
+BOILER = re.compile(r"訂閱|版權|著作權|延伸閱讀|責任編輯|免責|下載|加入.*(LINE|Line|好友)|©|請點|點我|追蹤我們|廣告|看更多|圖／|圖/|記者.{0,6}／|本文不代表")
+
+
+def _decode_gnews(url: str) -> str:
+    """Google 新聞的連結是轉址，要先解回原始新聞網址才能抓內文。"""
+    if "news.google.com" not in url:
+        return url
+    try:
+        from googlenewsdecoder import gnewsdecoder
+        res = gnewsdecoder(url, interval=1)
+        if res.get("success") or res.get("status"):
+            return res.get("decoded_url") or url
+    except Exception:
+        pass
+    return url
+
+
+def extract_text(html_text: str, url: str) -> str:
+    soup = BeautifulSoup(html_text, "html.parser")
+    for t in soup(["script", "style", "nav", "footer", "aside", "header", "form", "figure", "noscript"]):
+        t.decompose()
+    if "ptt.cc" in url:
+        main = soup.select_one("#main-content")
+        if not main:
+            return ""
+        for t in main.select(".article-metaline, .article-metaline-right, .push, span.f2"):
+            t.decompose()
+        return main.get_text("\n").split("--\n※")[0]
+    root = (soup.select_one(".caas-body") or soup.select_one("[itemprop=articleBody]") or soup.select_one("#article-container")
+            or soup.select_one("article") or soup.select_one("main") or soup)
+    paras = [p.get_text(" ", strip=True) for p in root.find_all("p")]
+    paras = [p for p in paras if len(p) >= 15 and not BOILER.search(p)]
+    return "\n".join(paras)
+
+
+def split_sentences(text: str, limit: int = 25) -> list[str]:
+    out = []
+    for s in re.split(r"(?<=[。！？!?；])|\n+", text):
+        s = re.sub(r"\s+", " ", s).strip(" 　")
+        if 10 <= len(s) <= 160 and not BOILER.search(s) and s not in out:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def article_text(c: httpx.AsyncClient, a: dict) -> str:
+    url = a["url"]
+    try:
+        m = re.search(r"news\.cnyes\.com/news/id/(\d+)", url)
+        if m:
+            r = await c.get(f"https://api.cnyes.com/media/api/v1/news/{m.group(1)}")
+            item = r.json().get("items") or r.json().get("data") or {}
+            return extract_text(f"<article>{html.unescape(item.get('content', ''))}</article>", url)
+        url = await asyncio.to_thread(_decode_gnews, url)
+        if "news.google.com" in url:
+            return ""
+        r = await c.get(url)
+        if r.status_code != 200:
+            return ""
+        return extract_text(r.text, url)
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------- 給網頁用的全市場資料（每天產生一次）
+async def all_valuations() -> dict:
+    await valuation("2330")
+    return _val_cache["map"]
 
 
 # ---------------------------------------------------------------- 新聞：鉅亨網
@@ -197,7 +308,7 @@ async def cnyes_news(name: str, days: int) -> tuple[list[dict], str | None]:
                     "title": title,
                     "url": f"https://news.cnyes.com/news/id/{nid}",
                     "source": "鉅亨網",
-                    "channel": "新聞",
+                    "channel": "財經媒體",
                     "date": dt.isoformat(),
                     "summary": _clean(it.get("summary"))[:160],
                     "views": views,
@@ -382,8 +493,10 @@ async def valuation(code: str) -> dict:
 
 # ---------------------------------------------------------------- 彙整
 def dedupe(articles: list[dict]) -> list[dict]:
+    """同標題只留一篇：優先保留有瀏覽量、可直接開啟原文（非 Google 轉址）的版本。"""
     seen, out = set(), []
-    for a in sorted(articles, key=lambda a: (a["views"] is None, a["date"]), reverse=False):
+    rank = lambda a: (a["views"] is None, "news.google.com" in (a["url"] or ""), a["date"])
+    for a in sorted(articles, key=rank):
         key = re.sub(r"[\s\W_]+", "", a["title"])[:40]
         if key and key not in seen:
             seen.add(key)
@@ -393,13 +506,13 @@ def dedupe(articles: list[dict]) -> list[dict]:
 
 async def collect(stock: dict, days: int) -> dict:
     name, code = stock["name"], stock["code"]
-    (g, ge), (cn, ce), (pt, pe), (rows, quote_, market, qe), val = await asyncio.gather(
-        google_news(name, code, days), cnyes_news(name, days), ptt_stock(name, days),
+    (g, ge), (y, ye), (cn, ce), (pt, pe), (rows, quote_, market, qe), val = await asyncio.gather(
+        google_news(name, code, days), yahoo_news(code, days), cnyes_news(name, days), ptt_stock(name, days),
         prices(code), valuation(code),
     )
-    errors = [e for e in (ge, ce, pe, qe) if e]
+    errors = [e for e in (ge, ye, ce, pe, qe) if e]
     return {
         "code": code, "name": name, "market": market or stock.get("market"),
-        "articles": dedupe(g + cn + pt), "prices": rows, "quote": quote_,
+        "articles": dedupe(cn + y + g + pt), "prices": rows, "quote": quote_,
         "valuation": val, "errors": errors,
     }

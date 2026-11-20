@@ -147,3 +147,34 @@ def analyze_articles(articles: list[dict], stock_name: str, code: str) -> str:
         a["hints"] = hints
         a["keywords"] = keywords(texts[i], exclude)
     return f"FinBERT（{MODEL_NAME}）" if bert_scores is not None else "金融字典法（FinBERT 未載入時的備援）"
+
+
+# ---------------------------------------------------------------- 逐句分析（判斷依據）
+def analyze_body(a: dict, sentences: list[str]) -> None:
+    """用內文逐句重新判斷，並挑出最能支持結論的句子當作判斷依據。
+
+    文章分數 = 標題 40% ＋ 內文各句平均 60%；判斷依據 = 對最終結論機率最高的 3 句。
+    """
+    a["bodyTried"] = True
+    if not sentences:
+        return
+    use_bert = finbert.status == "ready"
+    probs = finbert.predict(sentences) if use_bert else [dict_score(s)[0] for s in sentences]
+    title_p = a["scores"]
+    mean = {k: sum(p[k] for p in probs) / len(probs) for k in ("pos", "neu", "neg")}
+    combo = {k: round(0.4 * title_p[k] + 0.6 * mean[k], 3) for k in ("pos", "neu", "neg")}
+    # 有明顯正負面句子時，不讓大量中性句把結論拉成中性
+    strong = {k: max(p[k] for p in probs) for k in ("pos", "neg")}
+    a["scores"] = combo
+    a["sentiment"] = label_of(combo)
+    if a["sentiment"] == "neu" and max(strong.values()) > 0.9 and abs(strong["pos"] - strong["neg"]) > 0.3:
+        a["sentiment"] = "pos" if strong["pos"] > strong["neg"] else "neg"
+    lab = a["sentiment"]
+    ranked = sorted(zip(sentences, probs), key=lambda x: x[1][lab], reverse=True)
+    ev = []
+    for s, p in ranked[:3]:
+        if lab != "neu" and p[lab] < 0.4:
+            break
+        ev.append({"text": s, "label": label_of(p), "p": round(p[lab], 3), "hits": dict_score(s)[1]})
+    a["evidence"] = ev
+    a["nSentences"] = len(sentences)

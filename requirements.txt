@@ -4,3 +4,4 @@ jieba>=0.42
 opencc-python-reimplemented>=0.1.7
 transformers>=4.40
 torch>=2.2
+googlenewsdecoder>=0.2.2

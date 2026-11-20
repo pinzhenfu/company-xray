@@ -36,6 +36,43 @@ def title_key(t: str) -> str:
     return re.sub(r"[\s\W_]+", "", t)[:40]
 
 
+def recanon(arts: list[dict]) -> list[dict]:
+    """舊資料也套用知名媒體白名單（舊版資料沒有分類）。"""
+    out = []
+    for a in arts:
+        if a["channel"] == "論壇":
+            out.append(a)
+            continue
+        m = sources.canon(a["source"], a.get("url", ""))
+        if m:
+            a["source"], a["channel"] = m
+            out.append(a)
+    return out
+
+
+async def body_pass(articles: list[dict], now: datetime, per_label: int = 8) -> int:
+    """替最近 30 天、正負面各最新 8 篇抓內文並逐句分析（已分析過的跳過）。"""
+    since = (now - timedelta(days=30)).isoformat()
+    todo = []
+    for lab in ("pos", "neg"):
+        group = [a for a in articles if a["sentiment"] == lab and a["date"] >= since]
+        todo += [a for a in group[:per_label] if not a.get("bodyTried")]
+    if not todo:
+        return 0
+    sem = asyncio.Semaphore(5)
+    async with sources.client() as c:
+        async def one(a):
+            async with sem:
+                return await sources.article_text(c, a)
+        texts = await asyncio.gather(*(one(a) for a in todo))
+    got = 0
+    for a, t in zip(todo, texts):
+        sents = sources.split_sentences(t)
+        await asyncio.to_thread(sentiment.analyze_body, a, sents)
+        got += bool(sents)
+    return got
+
+
 async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
     stock = await sources.resolve(code)
     if not stock:
@@ -56,8 +93,9 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
     for a in fresh:
         a["model"] = "finbert" if model.startswith("FinBERT") else "dict"
     cutoff = (now - timedelta(days=KEEP_DAYS)).isoformat()
-    articles = [a for a in fresh + (old["articles"] if old else []) if a["date"] >= cutoff]
+    articles = [a for a in fresh + recanon(old["articles"] if old else []) if a["date"] >= cutoff]
     articles.sort(key=lambda a: a["date"], reverse=True)
+    bodies = await body_pass(articles, now)
 
     data = {
         "code": stock["code"], "name": stock["name"], "market": new["market"],
@@ -69,7 +107,7 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
         "fetchedAt": now.isoformat(timespec="seconds"), "mode": "daily",
     }
     path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}、累積 {len(articles)}、股價 {len(data['prices'])} 天"
+    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}、累積 {len(articles)}、內文 {bodies} 篇、股價 {len(data['prices'])} 天"
           + (f"（{'；'.join(new['errors'])}）" if new["errors"] else ""))
     return data
 
@@ -106,7 +144,14 @@ async def main():
         "model": "FinBERT（yiyanghkust/finbert-tone-chinese）" if ok else "金融字典法（FinBERT 未載入）",
         "stocks": index,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"完成：{len(index)} 檔寫入 {OUT}")
+    # 全市場股票清單與估值：讓網頁可以搜尋全部台股、即時抓取時也有本益比
+    all_list = await sources.stock_list()
+    (OUT / "all_stocks.json").write_text(json.dumps(
+        [{"c": s["code"], "n": s["name"], "m": "O" if s.get("market") == "TPEx" else "L"} for s in all_list],
+        ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    vals = await sources.all_valuations()
+    (OUT / "valuation.json").write_text(json.dumps(vals, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"完成：{len(index)} 檔寫入 {OUT}；全市場清單 {len(all_list)} 檔、估值 {len(vals)} 檔")
 
 
 if __name__ == "__main__":
