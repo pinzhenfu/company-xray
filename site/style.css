@@ -163,3 +163,15 @@ table.data td.num,table.data th.num{text-align:right;font-variant-numeric:tabula
 @media(max-width:1100px){.cards{grid-template-columns:repeat(3,1fr)}.g3{grid-template-columns:1fr 1fr}.advice{grid-template-columns:1fr}}
 @media(max-width:860px){.hero{grid-template-columns:1fr}.g2,.g3,.g21,.g12{grid-template-columns:1fr}.tech{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){.app{padding:16px 12px 32px}.cards{grid-template-columns:repeat(2,1fr)}.hero-card{display:none}.top-actions{display:none}.price{font-size:28px}}
+/* 熱門文章：判斷依據 */
+div.art{display:block}
+.art a.t{display:block;font-weight:700;font-size:14px;color:var(--ink);text-decoration:none}
+.art a.t:hover{color:var(--blue);text-decoration:underline}
+.evi{margin-top:7px;font-size:12.5px;background:#f7f8fb;border-radius:9px;padding:8px 10px}
+.evi-h{color:var(--muted);font-size:11.5px;margin-bottom:3px}
+.evi ol{margin:0;padding-left:18px}
+.evi li{margin:3px 0;line-height:1.55}
+.evi li .badge{margin-left:5px;vertical-align:1px}
+.evi em{font-style:normal;font-weight:700;padding:0 2px;border-radius:3px;background:#e3eefc;color:#1d5aa6}
+.evi em.n{background:#fde9df;color:#a3421a}
+.evi-f{color:var(--faint);font-size:11px;margin-top:4px}

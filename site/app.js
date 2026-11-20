@@ -53,14 +53,18 @@ if (window.Chart) {
 // ------------------------------------------------------------------ 啟動
 async function init() {
   bindUI();
-  try {
-    INDEX = await getJSON('data/index.json?t=' + Date.now(), 10000);
-    LOCAL_LIST = INDEX.stocks || [];
-    S.mode = LOCAL_LIST.length ? 'daily' : 'empty';
-  } catch (e) { S.mode = 'empty'; }
+  await XLive.loadMedia();
+  try { INDEX = await getJSON('data/index.json?t=' + Date.now(), 10000); } catch (e) { INDEX = null; }
+  let all = [];
+  try { all = await getJSON('data/all_stocks.json', 15000); } catch (e) {}
+  const tracked = new Map(((INDEX && INDEX.stocks) || []).map((s) => [s.code, s]));
+  const list = all.map((s) => ({ code: s.c, name: s.n, market: s.m === 'O' ? 'TPEx' : 'TWSE' }));
+  tracked.forEach((s) => { if (!list.some((x) => x.code === s.code)) list.push({ code: s.code, name: s.name, market: s.market }); });
+  list.forEach((s) => { const t = tracked.get(s.code); if (t) Object.assign(s, { tracked: true, price: t.price, articles: t.articles }); });
+  LOCAL_LIST = list.sort((a, b) => (b.tracked ? 1 : 0) - (a.tracked ? 1 : 0) || a.code.localeCompare(b.code));
+  S.mode = tracked.size ? 'daily' : 'live-only';
   renderPills(); renderBanner();
-  if (S.mode !== 'daily') { $('view').innerHTML = `<div class="empty">資料還沒產生。<br>請到 GitHub 專案的 <b>Actions</b> 分頁，確認「每日更新資料並部署網站」已執行完成（約 10～20 分鐘），再重新整理此頁。</div>`; return; }
-  const first = params.get('s') ? params.get('s').split(',') : [LOCAL_LIST.some((s) => s.code === '2330') ? '2330' : LOCAL_LIST[0].code];
+  const first = params.get('s') ? params.get('s').split(',') : [tracked.has('2330') || !tracked.size ? '2330' : [...tracked.keys()][0]];
   for (const q of first.slice(0, MAX_STOCKS)) await addStock(q, true);
 }
 
@@ -69,46 +73,48 @@ const fmtTime = (iso) => { if (!iso) return '—'; const d = new Date(iso); retu
 function renderPills() {
   const mp = $('modePill'), ml = $('modelPill');
   if (S.mode === 'daily') { mp.textContent = `● 每日更新 · ${fmtTime(INDEX.updatedAt)}`; mp.className = 'pill live'; }
-  else { mp.textContent = '● 尚無資料'; mp.className = 'pill fallback'; }
-  ml.textContent = INDEX && INDEX.model ? '情緒模型：' + (INDEX.model.startsWith('FinBERT') ? 'FinBERT ✓' : '字典法（備援）') : '情緒模型：—';
+  else { mp.textContent = '● 僅即時抓取'; mp.className = 'pill fallback'; }
+  ml.textContent = INDEX && INDEX.model ? '追蹤股模型：' + (INDEX.model.startsWith('FinBERT') ? 'FinBERT ✓' : '字典法') : '情緒模型：字典法';
 }
 
 function renderBanner() {
-  if (S.mode !== 'daily') { $('banner').innerHTML = ''; return; }
+  const nTracked = LOCAL_LIST.filter((s) => s.tracked).length;
+  if (S.mode !== 'daily') { $('banner').innerHTML = `<div class="banner warn">每日資料尚未產生（請確認 GitHub Actions 已執行完成），目前所有股票都用即時抓取＋字典法。</div>`; return; }
   const hours = (Date.now() - new Date(INDEX.updatedAt).getTime()) / 3600000;
   $('banner').innerHTML = hours > 36
-    ? `<div class="banner warn"><b>資料已超過 ${Math.floor(hours / 24)} 天沒更新</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。請到 GitHub 的 Actions 分頁查看自動更新是否失敗。</div>`
-    : `<div class="banner info">資料每天自動更新兩次（約 08:00、18:00），最後更新：<b>${fmtTime(INDEX.updatedAt)}</b>。目前追蹤 ${LOCAL_LIST.length} 檔股票，點搜尋框可看全部清單。</div>`;
+    ? `<div class="banner warn"><b>追蹤清單資料已超過 ${Math.floor(hours / 24)} 天沒更新</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。請到 GitHub 的 Actions 分頁查看自動更新是否失敗。</div>`
+    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.length)} 檔台股。<b>★ 追蹤清單 ${nTracked} 檔</b>：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取，約 20～60 秒，使用金融字典法。</div>`;
 }
 
 // ------------------------------------------------------------------ 搜尋與股票清單
 let sugIdx = -1, sugItems = [];
 function localMatch(q) {
-  q = q.trim(); if (!q) return LOCAL_LIST.slice();
+  q = q.trim(); if (!q) return LOCAL_LIST.filter((s) => s.tracked);
   const up = q.toUpperCase();
   const a = LOCAL_LIST.filter((s) => s.code.startsWith(up) || s.name.startsWith(q));
   const b = LOCAL_LIST.filter((s) => !a.includes(s) && s.name.includes(q));
-  return a.concat(b);
+  return a.concat(b).slice(0, 30);
 }
 function showSuggest(items, q) {
   sugItems = items; sugIdx = -1;
   const box = $('suggest');
-  box.innerHTML = items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.price != null ? fmt(s.price, 2) + ' · ' : ''}${s.articles} 篇</small></button>`).join('')
-    || (q ? `<div style="padding:10px 13px;font-size:13px;color:var(--muted)">「${esc(q)}」不在追蹤清單中。要新增請編輯 GitHub 上的 watchlist.txt。</div>` : '');
+  box.innerHTML = (q ? '' : '<div style="padding:8px 13px 4px;font-size:12px;color:var(--faint)">★ 追蹤清單（秒開）。輸入代號或名稱可搜尋全部台股</div>')
+    + items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.tracked ? `★ 每日 FinBERT${s.price != null ? ' · ' + fmt(s.price, 2) : ''}` : `即時抓取 · ${s.market === 'TPEx' ? '上櫃' : '上市'}`}</small></button>`).join('')
+    || (q ? `<div style="padding:10px 13px;font-size:13px;color:var(--muted)">找不到「${esc(q)}」。${/^\d{4,6}[A-Z]?$/i.test(q) ? '按 Enter 仍可嘗試以此代號即時抓取。' : '請確認名稱或改輸入股票代號。'}</div>` : '');
   box.classList.toggle('show', !!box.innerHTML);
 }
 function bindUI() {
   const inp = $('searchInput');
-  inp.placeholder = '輸入代號或公司名稱，或點這裡看全部追蹤股票';
+  inp.placeholder = '輸入任一台股代號或名稱，例如 2330、長榮、6488';
   inp.addEventListener('focus', () => showSuggest(localMatch(inp.value), inp.value.trim()));
   inp.addEventListener('input', () => showSuggest(localMatch(inp.value), inp.value.trim()));
   inp.addEventListener('keydown', (e) => {
-    const box = $('suggest');
+    const box = $('suggest'), btns = [...box.querySelectorAll('button')];
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       if (!sugItems.length) return; e.preventDefault();
       sugIdx = (sugIdx + (e.key === 'ArrowDown' ? 1 : -1) + sugItems.length) % sugItems.length;
-      [...box.children].forEach((b, i) => b.classList.toggle('hl', i === sugIdx));
-      box.children[sugIdx]?.scrollIntoView({ block: 'nearest' });
+      btns.forEach((b, i) => b.classList.toggle('hl', i === sugIdx));
+      btns[sugIdx]?.scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const pick = sugIdx >= 0 ? sugItems[sugIdx] : null;
@@ -132,12 +138,13 @@ function submit(q) {
 }
 
 async function addStock(q, silent) {
-  const local = LOCAL_LIST.find((s) => s.code === q.toUpperCase() || s.name === q) || (q.trim() ? localMatch(q)[0] : null);
-  if (!local) { if (!silent) toast(`「${q}」不在追蹤清單中，可在 GitHub 的 watchlist.txt 新增`); return; }
+  let local = LOCAL_LIST.find((s) => s.code === q.toUpperCase() || s.name === q) || (q.trim() ? localMatch(q)[0] : null);
+  if (!local && /^\d{4,6}[A-Z]?$/i.test(q)) local = { code: q.toUpperCase(), name: q.toUpperCase(), market: 'TWSE' };
+  if (!local) { if (!silent) toast(`找不到「${q}」，請改輸入股票代號`); return; }
   if (S.stocks.some((s) => s.code === local.code)) { S.tab = local.code; render(); return; }
   if (S.stocks.length >= MAX_STOCKS) return toast(`最多比較 ${MAX_STOCKS} 檔，請先移除一檔`);
   const used = new Set(S.stocks.map((s) => s.color));
-  const st = { code: local.code, name: local.name, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null };
+  const st = { code: local.code, name: local.name, market: local.market, tracked: !!local.tracked, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null, progress: '' };
   S.stocks.push(st); S.tab = st.code;
   render();
   await load(st);
@@ -149,20 +156,40 @@ function removeStock(code) {
   render();
 }
 
+const LIVE_CACHE = {};
 async function load(st) {
-  st.status = 'loading'; renderChips();
+  st.status = 'loading'; st.progress = ''; renderChips();
+  if (S.tab === st.code) render();
   try {
-    st.data = await getJSON(`data/s/${encodeURIComponent(st.code)}.json?t=${encodeURIComponent(INDEX.updatedAt)}`, 20000);
-    st.status = 'ok'; st.source = 'daily';
-  } catch (e) { st.status = 'error'; st.error = '資料檔讀取失敗（' + e.message + '）'; }
+    if (st.tracked) {
+      st.data = await getJSON(`data/s/${encodeURIComponent(st.code)}.json?t=${encodeURIComponent(INDEX.updatedAt)}`, 20000);
+      st.source = 'daily';
+    } else {
+      const hit = LIVE_CACHE[st.code];
+      st.data = hit && Date.now() - hit.t < 15 * 60000 ? hit.d : await XLive.collect(st, (msg) => { st.progress = msg; const el = $('loadMsg'); if (el && S.tab === st.code) el.textContent = msg; });
+      LIVE_CACHE[st.code] = { t: Date.now(), d: st.data };
+      st.source = 'live';
+    }
+    st.name = st.data.name; st.status = 'ok';
+  } catch (e) { st.status = 'error'; st.error = e.message; }
   render();
 }
+
 // ------------------------------------------------------------------ 分析核心
 function refDate(d) { return new Date(d.fetchedAt); }
+const GROUP_ORDER = ['財經媒體', '綜合媒體', '電視新聞', '科技媒體', '論壇'];
+function normalize(arts) {
+  // 舊版資料沒有媒體分類：套用知名媒體白名單，不在名單上的來源不列入
+  return arts.filter((a) => {
+    if (GROUP_ORDER.includes(a.channel)) return true;
+    const m = XLive.canon(a.source, a.url || ''); if (!m) return false;
+    a.source = m[0]; a.channel = m[1]; return true;
+  });
+}
 
 function analyze(d, days) {
   const ref = refDate(d), end = ref.getTime(), start = end - days * DAY, pstart = start - days * DAY;
-  const arts = d.articles.map((a) => ({ ...a, t: new Date(a.date).getTime() }));
+  const arts = normalize(d.articles).map((a) => ({ ...a, t: new Date(a.date).getTime() }));
   const cur = arts.filter((a) => a.t > start && a.t <= end + DAY);
   const prev = arts.filter((a) => a.t > pstart && a.t <= start);
   const cnt = (list) => { const c = { pos: 0, neu: 0, neg: 0 }; list.forEach((a) => c[a.sentiment]++); return c; };
@@ -184,7 +211,7 @@ function analyze(d, days) {
     (byCh[a.channel] = byCh[a.channel] || { pos: 0, neu: 0, neg: 0, n: 0 })[a.sentiment]++; byCh[a.channel].n++;
   });
   const sources = Object.entries(bySrc).sort((a, b) => b[1].n - a[1].n);
-  const channels = Object.entries(byCh).sort((a, b) => b[1].n - a[1].n);
+  const channels = Object.entries(byCh).sort((a, b) => GROUP_ORDER.indexOf(a[0]) - GROUP_ORDER.indexOf(b[0]));
 
   // 關鍵字
   const kw = {};
@@ -197,7 +224,7 @@ function analyze(d, days) {
     const g = cur.filter((a) => a.sentiment === s);
     const hasViews = g.some((a) => a.views != null);
     g.sort(hasViews ? (a, b) => (b.views ?? -1) - (a.views ?? -1) || b.t - a.t : (a, b) => b.t - a.t);
-    return { list: g.slice(0, 5), basis: hasViews ? '依瀏覽量排序' : '來源未提供瀏覽量，依發布時間排序（最新五篇）' };
+    return { list: g.slice(0, 5), basis: (hasViews ? '依瀏覽量排序' : '來源未提供瀏覽量，依發布時間排序（最新五篇）') + '。判斷依據為內文逐句分析後最具代表性的句子。' };
   };
 
   const tech = technicals(d.prices);
@@ -317,7 +344,7 @@ function render() {
   if (S.tab === 'compare') return renderCompare(v);
   const st = S.stocks.find((s) => s.code === S.tab) || S.stocks[0];
   S.tab = st.code;
-  if (st.status === 'loading') { v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>正在讀取「${esc(st.name)}」的資料…</div>`; return; }
+  if (st.status === 'loading') { v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>${st.tracked ? `正在讀取「${esc(st.name)}」的資料…` : `「${esc(st.name)}」不在追蹤清單，正在即時抓取（約 20～60 秒）<br><small id="loadMsg">${esc(st.progress || '準備中…')}</small>`}</div>`; return; }
   if (st.status === 'error') { v.innerHTML = `<div class="panel loading-box">無法取得「${esc(st.query)}」的資料：${esc(st.error)}<br><br><button class="secondary" onclick="retry('${esc(st.code)}')">重試</button></div>`; return; }
   renderStock(v, st);
 }
@@ -340,27 +367,41 @@ function chgHTML(ch, p) {
 function segBar(c, n) {
   return ['pos', 'neu', 'neg'].filter((k) => c[k]).map((k) => `<div class="fill" title="${SENT[k].name} ${c[k]}" style="width:${(c[k] / n) * 100}%;background:${SENT[k].color};border-radius:0"></div>`).join('');
 }
-function artHTML(a, showWhy = true) {
-  const sc = a.scores || {};
-  const why = showWhy ? `<div class="why">判斷依據：模型信心 ${SENT[a.sentiment].name} ${Math.round((sc[a.sentiment] || 0) * 100)}%${(a.hints?.pos || []).length || (a.hints?.neg || []).length ? '；金融詞：' : ''}${(a.hints?.pos || []).map((w) => `<em>${esc(w)}</em>`).join('')}${(a.hints?.neg || []).map((w) => `<em class="n">${esc(w)}</em>`).join('')}</div>
-    <div class="conf" title="正面 ${Math.round((sc.pos || 0) * 100)}% / 中性 ${Math.round((sc.neu || 0) * 100)}% / 負面 ${Math.round((sc.neg || 0) * 100)}%">${['pos', 'neu', 'neg'].map((k) => `<span style="width:${(sc[k] || 0) * 100}%;background:${SENT[k].color}"></span>`).join('')}</div>` : '';
-  return `<a class="art ${a.sentiment}" href="${esc(a.url)}" target="_blank" rel="noopener">
-    <div class="t">${esc(a.title)}</div>
-    <div class="m"><span>${esc(a.source)}</span><span>${esc(a.date.slice(0, 10))}</span>${a.views != null ? `<span>瀏覽 ${fmt(a.views)}</span>` : ''}${a.push != null ? `<span>推文 ${a.push}</span>` : ''}<span>開啟原文 ↗</span></div>${why}</a>`;
+function markHits(text, hits) {
+  let h = esc(text);
+  const words = [...(hits?.pos || []).map((w) => [w, 'p']), ...(hits?.neg || []).map((w) => [w, 'n'])].sort((x, y) => y[0].length - x[0].length);
+  words.forEach(([w, c]) => { h = h.split(esc(w)).join(`\u0001${c}${esc(w)}\u0002`); });
+  return h.replace(/\u0001p/g, '<em>').replace(/\u0001n/g, '<em class="n">').replace(/\u0002/g, '</em>');
+}
+function artHTML(a) {
+  const sc = a.scores || {}, lab = a.sentiment;
+  const confBar = `<div class="conf" title="正面 ${Math.round((sc.pos || 0) * 100)}% / 中性 ${Math.round((sc.neu || 0) * 100)}% / 負面 ${Math.round((sc.neg || 0) * 100)}%">${['pos', 'neu', 'neg'].map((k) => `<span style="width:${(sc[k] || 0) * 100}%;background:${SENT[k].color}"></span>`).join('')}</div>`;
+  let why;
+  if (a.evidence && a.evidence.length) {
+    why = `<div class="evi"><div class="evi-h">判斷依據：從內文 ${a.nSentences} 句中，最能代表「${SENT[lab].name}」的句子</div><ol>${a.evidence.map((e) => `<li>「${markHits(e.text, e.hits)}」<span class="badge ${e.label}">${SENT[e.label].name} ${Math.round(e.p * 100)}%</span></li>`).join('')}</ol>
+      <div class="evi-f">整篇判定：${SENT[lab].name} ${Math.round((sc[lab] || 0) * 100)}%（標題 40%＋內文各句平均 60%）· ${a.model === 'finbert' ? 'FinBERT' : '字典法'}</div></div>`;
+  } else {
+    const reason = a.bodyTried ? '無法擷取此篇內文' : a.url.includes('news.google.com') ? '此來源僅提供標題' : '此篇未分析內文';
+    why = `<div class="evi"><div class="evi-h">判斷依據（${reason}，依標題判斷）</div><ol><li>「${markHits(a.title, a.hints)}」<span class="badge ${lab}">${SENT[lab].name} ${Math.round((sc[lab] || 0) * 100)}%</span></li></ol></div>`;
+  }
+  return `<div class="art ${lab}">
+    <a class="t" href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)} ↗</a>
+    <div class="m"><span><b>${esc(a.source)}</b></span><span>${esc(a.channel)}</span><span>${esc(a.date.slice(0, 10))}</span>${a.views != null ? `<span>瀏覽 ${fmt(a.views)}</span>` : ''}${a.push != null ? `<span>推文 ${a.push}</span>` : ''}</div>
+    ${why}${confBar}</div>`;
 }
 
 function renderStock(v, st) {
   const d = st.data, a = analyze(d, S.days), q = d.quote || {}, val = d.valuation || {}, t = a.tech, sc = a.score;
   const adv = adviceText(a);
   const pvol = a.prev.length ? (a.total / a.prev.length - 1) * 100 : null;
-  const srcNote = `每日更新 · ${fmtTime(d.fetchedAt)}`;
+  const srcNote = st.source === 'live' ? `即時抓取 · ${fmtTime(d.fetchedAt)}` : `每日更新 · ${fmtTime(d.fetchedAt)}`;
   v.innerHTML = `
   <section class="panel stock-head">
     <div>
       <h3>${esc(d.name)}<small>${esc(d.code)} · ${d.market === 'TPEx' ? '上櫃' : '上市'}</small></h3>
       <div class="price-line">${q.price != null ? `<span class="price">${fmt(q.price, 2)}</span>${chgHTML(q.change, q.changePct)}` : '<span class="meta-small">無股價資料</span>'}</div>
       <div class="meta-small">${q.source ? `股價來源：${esc(q.source)}${q.time ? ' · ' + esc(String(q.time).slice(0, 16).replace('T', ' ')) : ''}` : ''}　情緒模型：${esc(d.model)}　資料：${esc(srcNote)}</div>
-      ${d.errors && d.errors.length ? `<div class="err-line">最近一次更新時部分來源未取得：${esc(d.errors.join('；'))}（已保留先前資料）</div>` : ''}
+      ${d.errors && d.errors.length ? `<div class="err-line">${st.source === 'live' ? '部分來源未取得' : '最近一次更新時部分來源未取得'}：${esc(d.errors.join('；'))}${st.source === 'live' ? '' : '（已保留先前資料）'}</div>` : ''}
     </div>
     <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
       <div class="val-grid"><div><span>本益比</span><b>${fmt(val.pe, 1)}</b></div><div><span>殖利率</span><b>${val.yield != null ? fmt(val.yield, 2) + '%' : '—'}</b></div><div><span>股價淨值比</span><b>${fmt(val.pb, 2)}</b></div></div>
@@ -389,7 +430,7 @@ function renderStock(v, st) {
       <h4>情緒佔比</h4>
       <div class="chart md" style="height:190px"><canvas id="cDonut"></canvas></div>
       <div class="legend" style="justify-content:center">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name} ${a.c[k]}（${a.total ? Math.round((a.c[k] / a.total) * 100) : 0}%）</span>`).join('')}</div>
-      <h4 style="margin-top:12px">來源類型</h4>
+      <h4 style="margin-top:12px">媒體類型</h4>
       ${a.channels.map(([k, c]) => `<div class="hbar"><span>${esc(k)}</span><div class="track">${segBar(c, Math.max(...a.channels.map((x) => x[1].n)))}</div><b>${c.n}</b></div>`).join('') || '<p class="sub">無資料</p>'}
     </section>
   </div>
