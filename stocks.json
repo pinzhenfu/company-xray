@@ -1,0 +1,447 @@
+[
+{
+"code": "2330",
+"name": "台積電",
+"market": "TWSE"
+},
+{
+"code": "2317",
+"name": "鴻海",
+"market": "TWSE"
+},
+{
+"code": "2454",
+"name": "聯發科",
+"market": "TWSE"
+},
+{
+"code": "2308",
+"name": "台達電",
+"market": "TWSE"
+},
+{
+"code": "2382",
+"name": "廣達",
+"market": "TWSE"
+},
+{
+"code": "2412",
+"name": "中華電",
+"market": "TWSE"
+},
+{
+"code": "2881",
+"name": "富邦金",
+"market": "TWSE"
+},
+{
+"code": "2882",
+"name": "國泰金",
+"market": "TWSE"
+},
+{
+"code": "2891",
+"name": "中信金",
+"market": "TWSE"
+},
+{
+"code": "2886",
+"name": "兆豐金",
+"market": "TWSE"
+},
+{
+"code": "2884",
+"name": "玉山金",
+"market": "TWSE"
+},
+{
+"code": "2885",
+"name": "元大金",
+"market": "TWSE"
+},
+{
+"code": "2892",
+"name": "第一金",
+"market": "TWSE"
+},
+{
+"code": "2880",
+"name": "華南金",
+"market": "TWSE"
+},
+{
+"code": "2890",
+"name": "永豐金",
+"market": "TWSE"
+},
+{
+"code": "5880",
+"name": "合庫金",
+"market": "TWSE"
+},
+{
+"code": "2801",
+"name": "彰銀",
+"market": "TWSE"
+},
+{
+"code": "2834",
+"name": "臺企銀",
+"market": "TWSE"
+},
+{
+"code": "5876",
+"name": "上海商銀",
+"market": "TWSE"
+},
+{
+"code": "2303",
+"name": "聯電",
+"market": "TWSE"
+},
+{
+"code": "3711",
+"name": "日月光投控",
+"market": "TWSE"
+},
+{
+"code": "2357",
+"name": "華碩",
+"market": "TWSE"
+},
+{
+"code": "2395",
+"name": "研華",
+"market": "TWSE"
+},
+{
+"code": "3008",
+"name": "大立光",
+"market": "TWSE"
+},
+{
+"code": "2002",
+"name": "中鋼",
+"market": "TWSE"
+},
+{
+"code": "1301",
+"name": "台塑",
+"market": "TWSE"
+},
+{
+"code": "1303",
+"name": "南亞",
+"market": "TWSE"
+},
+{
+"code": "1326",
+"name": "台化",
+"market": "TWSE"
+},
+{
+"code": "6505",
+"name": "台塑化",
+"market": "TWSE"
+},
+{
+"code": "2207",
+"name": "和泰車",
+"market": "TWSE"
+},
+{
+"code": "1216",
+"name": "統一",
+"market": "TWSE"
+},
+{
+"code": "2912",
+"name": "統一超",
+"market": "TWSE"
+},
+{
+"code": "2603",
+"name": "長榮",
+"market": "TWSE"
+},
+{
+"code": "2609",
+"name": "陽明",
+"market": "TWSE"
+},
+{
+"code": "2615",
+"name": "萬海",
+"market": "TWSE"
+},
+{
+"code": "2610",
+"name": "華航",
+"market": "TWSE"
+},
+{
+"code": "2618",
+"name": "長榮航",
+"market": "TWSE"
+},
+{
+"code": "3231",
+"name": "緯創",
+"market": "TWSE"
+},
+{
+"code": "2356",
+"name": "英業達",
+"market": "TWSE"
+},
+{
+"code": "2324",
+"name": "仁寶",
+"market": "TWSE"
+},
+{
+"code": "4938",
+"name": "和碩",
+"market": "TWSE"
+},
+{
+"code": "2376",
+"name": "技嘉",
+"market": "TWSE"
+},
+{
+"code": "2377",
+"name": "微星",
+"market": "TWSE"
+},
+{
+"code": "3017",
+"name": "奇鋐",
+"market": "TWSE"
+},
+{
+"code": "3661",
+"name": "世芯-KY",
+"market": "TWSE"
+},
+{
+"code": "3034",
+"name": "聯詠",
+"market": "TWSE"
+},
+{
+"code": "2379",
+"name": "瑞昱",
+"market": "TWSE"
+},
+{
+"code": "3037",
+"name": "欣興",
+"market": "TWSE"
+},
+{
+"code": "2345",
+"name": "智邦",
+"market": "TWSE"
+},
+{
+"code": "2327",
+"name": "國巨",
+"market": "TWSE"
+},
+{
+"code": "2301",
+"name": "光寶科",
+"market": "TWSE"
+},
+{
+"code": "2408",
+"name": "南亞科",
+"market": "TWSE"
+},
+{
+"code": "2344",
+"name": "華邦電",
+"market": "TWSE"
+},
+{
+"code": "2337",
+"name": "旺宏",
+"market": "TWSE"
+},
+{
+"code": "6669",
+"name": "緯穎",
+"market": "TWSE"
+},
+{
+"code": "3443",
+"name": "創意",
+"market": "TWSE"
+},
+{
+"code": "5269",
+"name": "祥碩",
+"market": "TWSE"
+},
+{
+"code": "2449",
+"name": "京元電子",
+"market": "TWSE"
+},
+{
+"code": "3045",
+"name": "台灣大",
+"market": "TWSE"
+},
+{
+"code": "4904",
+"name": "遠傳",
+"market": "TWSE"
+},
+{
+"code": "1101",
+"name": "台泥",
+"market": "TWSE"
+},
+{
+"code": "1102",
+"name": "亞泥",
+"market": "TWSE"
+},
+{
+"code": "2105",
+"name": "正新",
+"market": "TWSE"
+},
+{
+"code": "9910",
+"name": "豐泰",
+"market": "TWSE"
+},
+{
+"code": "9904",
+"name": "寶成",
+"market": "TWSE"
+},
+{
+"code": "1476",
+"name": "儒鴻",
+"market": "TWSE"
+},
+{
+"code": "2059",
+"name": "川湖",
+"market": "TWSE"
+},
+{
+"code": "3529",
+"name": "力旺",
+"market": "TWSE"
+},
+{
+"code": "2474",
+"name": "可成",
+"market": "TWSE"
+},
+{
+"code": "2353",
+"name": "宏碁",
+"market": "TWSE"
+},
+{
+"code": "2409",
+"name": "友達",
+"market": "TWSE"
+},
+{
+"code": "3481",
+"name": "群創",
+"market": "TWSE"
+},
+{
+"code": "1590",
+"name": "亞德客-KY",
+"market": "TWSE"
+},
+{
+"code": "2383",
+"name": "台光電",
+"market": "TWSE"
+},
+{
+"code": "2368",
+"name": "金像電",
+"market": "TWSE"
+},
+{
+"code": "3533",
+"name": "嘉澤",
+"market": "TWSE"
+},
+{
+"code": "0050",
+"name": "元大台灣50",
+"market": "TWSE"
+},
+{
+"code": "0056",
+"name": "元大高股息",
+"market": "TWSE"
+},
+{
+"code": "00878",
+"name": "國泰永續高股息",
+"market": "TWSE"
+},
+{
+"code": "00919",
+"name": "群益台灣精選高息",
+"market": "TWSE"
+},
+{
+"code": "006208",
+"name": "富邦台50",
+"market": "TWSE"
+},
+{
+"code": "6488",
+"name": "環球晶",
+"market": "TPEx"
+},
+{
+"code": "5347",
+"name": "世界",
+"market": "TPEx"
+},
+{
+"code": "3105",
+"name": "穩懋",
+"market": "TPEx"
+},
+{
+"code": "8299",
+"name": "群聯",
+"market": "TPEx"
+},
+{
+"code": "5483",
+"name": "中美晶",
+"market": "TPEx"
+},
+{
+"code": "8069",
+"name": "元太",
+"market": "TPEx"
+},
+{
+"code": "3293",
+"name": "鈊象",
+"market": "TPEx"
+},
+{
+"code": "3324",
+"name": "雙鴻",
+"market": "TPEx"
+}
+]
