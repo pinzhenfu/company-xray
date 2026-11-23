@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="公司健檢照妖鏡：輸入台股代號，用 FinBERT 分析新聞與論壇情緒，搭配股價與技術指標給出投資分析。" />
-<title>公司健檢照妖鏡｜Company X-Ray</title>
+<meta name="description" content="台股情緒站：輸入台股代號，用 FinBERT 分析新聞與論壇情緒，搭配股價與技術指標給出投資分析。" />
+<title>台股情緒站</title>
 <link rel="stylesheet" href="style.css" />
 <script src="chart.umd.min.js"></script>
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">X</div><div><h1>公司健檢照妖鏡</h1><p>Company X-Ray · 台股新聞情緒 × 股價分析</p></div></div>
+    <div class="brand"><div class="brand-mark">情</div><div><h1>台股情緒站</h1><p>FinBERT 台股新聞情緒 × 股價分析</p></div></div>
     <div class="top-actions"><span class="pill" id="modePill">連線中…</span><span class="pill" id="modelPill">情緒模型：—</span></div>
   </header>
 
@@ -21,7 +21,6 @@
       <h2>看懂公司怎麼說，<br><em>也看懂市場怎麼看。</em></h2>
       <p>輸入台股代號或公司名稱，系統蒐集 24 家知名媒體的新聞與 PTT 討論，用論文作者釋出的中文 FinBERT 判斷每篇文章是正面、負面或中性，並逐句找出判斷依據，再結合股價、技術指標與估值給出分析。</p>
     </div>
-    <div class="hero-card"><strong>為什麼需要照妖鏡？</strong><span>FinBERT 論文發現：傳統字典法常把有情緒的金融句子誤判成「中性」。一般投資人每天面對上百則新聞，沒時間逐篇讀——我們把情緒量化，並附上原文連結讓你自己查證。</span></div>
   </section>
 
   <section class="panel search-panel">
@@ -31,9 +30,9 @@
         <div class="suggest" id="suggest"></div>
       </div>
       <div class="range" id="rangeGroup" role="group" aria-label="期間">
-        <button data-days="7">近 7 天</button><button data-days="30" class="active">近 30 天</button><button data-days="90">近 90 天</button>
+        <button data-days="7">近 7 天</button><button data-days="30" class="active">近 30 天</button>
       </div>
-      <button class="primary" id="addBtn">開始健檢</button>
+      <button class="primary" id="addBtn">開始分析</button>
       <button class="cmp-btn" id="cmpBtn">⇄ 多股比較</button>
     </div>
     <div class="cmp-panel" id="cmpPanel"></div>
@@ -43,9 +42,9 @@
 
   <nav class="tabs" id="tabs"></nav>
   <div id="banner"></div>
-  <main id="view"><div class="empty">輸入一檔股票開始健檢。</div></main>
+  <main id="view"><div class="empty">輸入一檔股票開始分析。</div></main>
 
-  <p class="footer">公司健檢照妖鏡為 MIS 課程 MVP，延伸自 Huang, Wang &amp; Yang (2023) FinBERT 論文。情緒標籤可能誤判，分析與評分為規則式計算，<b>不構成投資建議</b>；請以原始公告、完整報告與專業意見為準。</p>
+  <p class="footer">台股情緒站為 MIS 課程 MVP，延伸自 Huang, Wang &amp; Yang (2023) FinBERT 論文。情緒標籤可能誤判，分析與評分為規則式計算，<b>不構成投資建議</b>；請以原始公告、完整報告與專業意見為準。</p>
 </div>
 <div class="toast" id="toast"></div>
 <script src="live.js"></script>

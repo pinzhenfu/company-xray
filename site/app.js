@@ -1,4 +1,4 @@
-/* 公司健檢照妖鏡｜Company X-Ray 前端
+/* 台股情緒站 前端
  * 資料流程：GitHub Actions 每日產生 data/index.json 與 data/s/{代號}.json → 網頁讀取
  * 所有統計、圖表、技術指標與投資評分都在瀏覽器計算，因此即時與備援模式畫面完全一致。
  */
@@ -373,7 +373,7 @@ function render() {
   const v = $('view');
   v.onclick = null;
   if (S.tab === 'market' && INDEX) return renderMarket(v);
-  if (!S.stocks.length) { v.innerHTML = '<div class="empty">輸入一檔股票開始健檢。</div>'; return; }
+  if (!S.stocks.length) { v.innerHTML = '<div class="empty">輸入一檔股票開始分析。</div>'; return; }
   if (S.tab === 'compare') return renderCompare(v);
   const st = S.stocks.find((s) => s.code === S.tab) || S.stocks[0];
   S.tab = st.code;
@@ -474,7 +474,7 @@ function dataNotes(st, d, a) {
   if (failed.includes('股價') && (!d.prices || !d.prices.length)) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔股票的資料，因此技術指標與部分評分無法計算。');
   else if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市或暫停交易，因此技術指標與部分評分無法計算。');
   if (d.tier === 'light' && a.total) notes.push(`這檔股票不在熱門清單，<b>每天更新一次</b>（最後更新 ${fmtTime(d.fetchedAt)}），新聞來自 Google 新聞的 24 家知名媒體，並用 FinBERT 判斷<b>標題</b>情緒（熱門股才會另外讀取內文找判斷依據）。`);
-  if (!a.total && !allNewsFailed) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
+  if (!a.total && !allNewsFailed) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 30 ? '可以改選「近 30 天」，' : ''}或參考下方的股價與技術面分析。`);
   else if (a.total && a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
   if (!notes.length) return '';
   return `<section class="panel box nodata" style="margin-bottom:12px"><h4>ℹ️ 資料說明 <small>為什麼有些資料沒有出現</small></h4><ul class="adv-list">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>${live && failedNews.length ? `<button class="secondary" id="retryBtn" onclick="retry('${esc(st.code)}', true)">重新抓取</button> <span class="meta-small" id="retryMsg"></span>` : ''}</section>`;
@@ -502,7 +502,7 @@ function renderStock(v, st) {
   ${dataNotes(st, d, a)}
 
   <div class="cards">
-    <div class="metric"><div class="label">總聲量</div><div class="value">${fmt(a.total)}</div><div class="hint">${pvol == null ? `近 ${a.days} 天文章數` : `較前期 ${pct(pvol, 0)}`}</div></div>
+    <div class="metric"><div class="label">總聲量 <span class="tip">依新聞數量計算</span></div><div class="value">${fmt(a.total)}</div><div class="hint">${pvol == null ? `近 ${a.days} 天新聞篇數` : `${a.total} 篇・較前期 ${pct(pvol, 0)}`}</div></div>
     <div class="metric"><div class="label">好感度（正／負）</div><div class="value">${a.favor == null ? '—' : a.favor.toFixed(2)}</div><div class="hint">${a.favor == null ? '無文章' : a.favor >= 1 ? '正面聲量多於負面' : '負面聲量多於正面'}</div></div>
     <div class="metric"><div class="label">正面佔比</div><div class="value" style="color:${SENT.pos.color}">${a.total ? pct((a.c.pos / a.total) * 100, 0, false) : '—'}</div><div class="hint">${a.c.pos} 篇</div></div>
     <div class="metric"><div class="label">負面佔比</div><div class="value" style="color:#c4521f">${a.total ? pct((a.c.neg / a.total) * 100, 0, false) : '—'}</div><div class="hint">${a.c.neg} 篇</div></div>
@@ -512,7 +512,7 @@ function renderStock(v, st) {
 
   <div class="grid g21">
     <section class="panel box">
-      <h4>聲量與情緒趨勢 <small>每日文章數，依情緒堆疊</small></h4>
+      <h4>聲量與情緒趨勢 <small>聲量＝每日新聞數量（含 PTT 討論），依情緒堆疊</small></h4>
       ${(() => { const cs = coverageStart(d); if (st.source === 'live') return '<p class="cov-note">即時抓取只能取得各來源「最新」約 100 篇文章，較早日期的文章數會偏少（不是那幾天沒有新聞）。★ 追蹤股票有完整的每日歷史。</p>'; if (cs && cs > a.dates[0]) return `<p class="cov-note">灰底區（${md(cs)} 以前）的舊新聞仍在補抓中，文章數偏少不代表沒有新聞；每次自動更新都會補齊更多。</p>`; return '<p class="sub" style="margin:2px 0 6px">每日文章來自 Google 新聞逐日歸檔；最近兩天另外加上 Yahoo 股市、鉅亨網、PTT 的即時來源，所以最新一兩天的篇數可能略多。</p>'; })()}
       <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
       <div class="chart md"><canvas id="cVolume"></canvas></div>
@@ -683,7 +683,7 @@ function drawTable() {
 function exportReport(a, adv) {
   const d = a.d, t = a.tech || {};
   const lines = [
-    '公司健檢照妖鏡｜分析摘要', `公司：${d.name}（${d.code}）`, `期間：近 ${a.days} 天（${a.dates[0]} ～ ${a.dates[a.dates.length - 1]}）`,
+    '台股情緒站｜分析摘要', `公司：${d.name}（${d.code}）`, `期間：近 ${a.days} 天（${a.dates[0]} ～ ${a.dates[a.dates.length - 1]}）`,
     `資料模式：${d.mode}　情緒模型：${d.model}`, '',
     `股價：${fmt(d.quote?.price, 2)}（${pct(d.quote?.changePct, 2)}）　本益比 ${fmt(d.valuation?.pe, 1)}　殖利率 ${fmt(d.valuation?.yield, 2)}%`,
     `總聲量：${a.total} 篇　正面 ${a.c.pos}／中性 ${a.c.neu}／負面 ${a.c.neg}　好感度 ${a.favor == null ? '—' : a.favor.toFixed(2)}　淨情緒 ${a.net.toFixed(0)}`,
@@ -698,7 +698,7 @@ function exportReport(a, adv) {
   ];
   const el = document.createElement('a');
   el.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' }));
-  el.download = `company-xray-${d.code}.txt`; el.click(); toast('分析摘要已下載');
+  el.download = `台股情緒站-${d.code}.txt`; el.click(); toast('分析摘要已下載');
 }
 
 // ------------------------------------------------------------------ 多股比較
@@ -721,7 +721,7 @@ function renderCompare(v) {
     <section class="panel box"><h4>股價相對表現 <small>以期間第一個交易日＝100 指數化，可直接比較漲幅</small></h4>
       <div class="legend">${list.map((x) => `<span><i class="dot" style="background:${x.s.color}"></i>${esc(x.s.data.name)}</span>`).join('')}</div>
       <div class="chart"><canvas id="cmpPrice"></canvas></div></section>
-    <section class="panel box"><h4>每日聲量比較 <small>每天相關文章數</small></h4>
+    <section class="panel box"><h4>每日聲量比較 <small>聲量＝每天相關新聞數量</small></h4>
       <div class="legend">${list.map((x) => `<span><i class="dot" style="background:${x.s.color}"></i>${esc(x.s.data.name)}</span>`).join('')}</div>
       <div class="chart"><canvas id="cmpBuzz"></canvas></div></section>
   </div>
@@ -898,7 +898,7 @@ function renderMarket(v) {
   v.innerHTML = `
   <div class="cards">
     <div class="metric"><div class="label">追蹤檔數</div><div class="value">${list.length}</div><div class="hint">成交值前 100＋前 10 大 ETF＋自選</div></div>
-    <div class="metric"><div class="label">近 7 日總聲量</div><div class="value">${fmt(n7)}</div><div class="hint">${np7 ? `較前 7 日 ${pct((n7 / np7 - 1) * 100, 0)}` : '篇'}</div></div>
+    <div class="metric"><div class="label">近 7 日總聲量 <span class="tip">依新聞數量計算</span></div><div class="value">${fmt(n7)}</div><div class="hint">${np7 ? `較前 7 日 ${pct((n7 / np7 - 1) * 100, 0)}` : '篇'}</div></div>
     <div class="metric"><div class="label">市場淨情緒</div><div class="value">${sgn(mNet)}</div><div class="hint">${mPrev == null ? '近 7 日' : `前 7 日 ${sgn(mPrev)}`}</div></div>
     <div class="metric"><div class="label">正面佔比</div><div class="value" style="color:${SENT.pos.color}">${n7 ? Math.round((c7[0] / n7) * 100) + '%' : '—'}</div><div class="hint">${c7[0]} 篇</div></div>
     <div class="metric"><div class="label">負面佔比</div><div class="value" style="color:#c4521f">${n7 ? Math.round((c7[2] / n7) * 100) + '%' : '—'}</div><div class="hint">${c7[2]} 篇</div></div>
@@ -912,7 +912,7 @@ function renderMarket(v) {
   </section>
 
   <div class="grid g2">
-    <section class="panel box"><h4>市場每日聲量與情緒 <small>全部追蹤股票合計，近 30 天</small></h4>
+    <section class="panel box"><h4>市場每日聲量與情緒 <small>聲量＝每日新聞數量，熱門追蹤股票合計，近 30 天</small></h4>
       <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
       <div class="chart md"><canvas id="mkVol"></canvas></div></section>
     <section class="panel box"><h4>市場淨情緒 vs 元大台灣50（0050） <small>上：每日淨情緒；下：0050 收盤價，日期對齊</small></h4>
@@ -922,14 +922,14 @@ function renderMarket(v) {
   <div class="grid g2">
     <section class="panel box rank"><h4>😀 情緒最正面 <small>近 7 日、至少 ${MIN} 篇</small></h4>${rPos.map((s) => rowHTML(s, `${sgn(s.net7)}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
     <section class="panel box rank"><h4>😟 情緒最負面 <small>近 7 日、至少 ${MIN} 篇</small></h4>${rNeg.map((s) => rowHTML(s, `${sgn(s.net7)}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
-    <section class="panel box rank"><h4>🔥 聲量暴增 <small>近 7 日 ÷ 前 7 日</small></h4>${rBuzz.map((s) => rowHTML(s, `${s.np7 ? '×' + (s.n7 / s.np7).toFixed(1) : '新增'}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
+    <section class="panel box rank"><h4>🔥 聲量暴增 <small>新聞數量：近 7 日 ÷ 前 7 日</small></h4>${rBuzz.map((s) => rowHTML(s, `${s.np7 ? '×' + (s.n7 / s.np7).toFixed(1) : '新增'}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
     <section class="panel box rank"><h4>🔄 情緒轉折 <small>近 7 日 vs 前 7 日淨情緒變化</small></h4>${rTurn.map((s) => rowHTML(s, `${sgn(s.netp7)} → ${sgn(s.net7)} ${s.net7 > s.netp7 ? '↑' : '↓'}`)).join('') || '<p class="sub">資料不足</p>'}</section>
   </div>
 
   <section class="panel box">
     <h4>全部追蹤股票 <small id="mkCount"></small></h4>
-    <div class="table-tools"><select id="mkInd"><option value="">全部產業</option>${indList.map((g) => `<option>${esc(g.name)}</option>`).join('')}</select><span class="meta-small">點標題排序、點列加入健檢</span></div>
-    <div class="tbl-wrap"><table class="data" id="mkTable"><thead><tr>${[['code', '代號'], ['name', '名稱'], ['industry', '產業'], ['price', '股價', 1], ['changePct', '漲跌', 1], ['n7', '7日聲量', 1], ['net7', '淨情緒', 1], ['ret20', '20日報酬', 1]].map(([k, t, n]) => `<th class="sortable ${n ? 'num' : ''}" data-k="${k}">${t}</th>`).join('')}</tr></thead><tbody></tbody></table></div>
+    <div class="table-tools"><select id="mkInd"><option value="">全部產業</option>${indList.map((g) => `<option>${esc(g.name)}</option>`).join('')}</select><span class="meta-small">點標題排序、點列加入分析</span></div>
+    <div class="tbl-wrap"><table class="data" id="mkTable"><thead><tr>${[['code', '代號'], ['name', '名稱'], ['industry', '產業'], ['price', '股價', 1], ['changePct', '漲跌', 1], ['n7', '7日聲量（新聞數）', 1], ['net7', '淨情緒', 1], ['ret20', '20日報酬', 1]].map(([k, t, n]) => `<th class="sortable ${n ? 'num' : ''}" data-k="${k}">${t}</th>`).join('')}</tr></thead><tbody></tbody></table></div>
   </section>`;
 
   // 圖表
