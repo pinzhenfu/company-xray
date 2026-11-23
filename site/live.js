@@ -278,5 +278,6 @@ window.XLive = (() => {
     await Promise.all([worker(), worker()]);
     cachePut(d.code, d);
   }
-  return { collect, fetchEvidence, canon, loadMedia, dictScore };
+  const clearCache = (code) => { try { localStorage.removeItem(CACHE_KEY(code)); } catch (e) {} };
+  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache };
 })();

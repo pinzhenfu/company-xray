@@ -21,6 +21,7 @@ concurrency:
 env:
   AUTO_TOP: "100"   # 自動追蹤成交值前幾大個股
   AUTO_ETF: "10"    # 自動追蹤成交值前幾大 ETF
+  BACKFILL_WEEKS: "13"  # 每次最多往回補抓幾週的舊新聞（補滿 90 天後就不再補）
 
 jobs:
   update:

@@ -100,13 +100,15 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
     days = 4 if old else 90
 
     new = await sources.collect(stock, days)
-    # 回填：每次往回補最多 BACKFILL_WEEKS 週（由近到遠），幾次更新後 90 天都會有資料
+    # 回填：一次補完近 90 天（13 週）；已補過的週不再重抓，所以之後的更新只會補新結束的那一週
     done = set((old or {}).get("backfill", []))
-    weeks = backfill_weeks(now, done)[: int(os.getenv("BACKFILL_WEEKS", "5"))]
+    weeks = backfill_weeks(now, done)[: int(os.getenv("BACKFILL_WEEKS", "13"))]
     for start, end in weeks:
-        new["articles"] += await sources.google_news_range(stock["name"], stock["code"], start, end)
-        done.add(start)
-        await asyncio.sleep(0.8)
+        got = await sources.google_news_range(stock["name"], stock["code"], start, end)
+        if got is not None:
+            new["articles"] += got
+            done.add(start)
+        await asyncio.sleep(0.6)
     # 合併文章：舊的保留（含已算好的情緒），只對新文章跑模型
     known_ids = {a["id"] for a in old["articles"]} if old else set()
     known_titles = {title_key(a["title"]) for a in old["articles"]} if old else set()

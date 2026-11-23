@@ -188,14 +188,19 @@ async def google_news(name: str, code: str, days: int) -> tuple[list[dict], str 
 async def google_news_range(name: str, code: str, start: str, end: str) -> list[dict]:
     """回填用：抓指定日期區間的新聞（Google 一次最多約 100 篇，分週抓才不會被最新新聞擠掉）。"""
     base = f'"{name}"' if name != code else f"{code} 股票"
-    try:
-        async with client() as c:
-            r = await c.get("https://news.google.com/rss/search?q=" + quote(f"{base} after:{start} before:{end}")
-                            + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    url = ("https://news.google.com/rss/search?q=" + quote(f"{base} after:{start} before:{end}")
+           + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    for attempt in range(3):  # 被限速（429）或暫時失敗時，等一下再試
+        try:
+            async with client() as c:
+                r = await c.get(url)
+            if r.status_code == 429 or r.status_code >= 500:
+                raise httpx.HTTPStatusError("retry", request=r.request, response=r)
             r.raise_for_status()
-        return [x for x in _parse_rss(r.content, "g") if start <= x["date"][:10] < end]
-    except Exception:
-        return []
+            return [x for x in _parse_rss(r.content, "g") if start <= x["date"][:10] < end]
+        except Exception:
+            await asyncio.sleep(3 * (attempt + 1))
+    return None  # 三次都失敗：不標記為已回填，下次再補
 
 
 # ---------------------------------------------------------------- 新聞：Yahoo 股市個股新聞 RSS

@@ -14,6 +14,11 @@ const SENT = {
 };
 const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'];   // 多股比較：顏色跟著股票走，不跟排名
 const MAX_STOCKS = 4;
+const CMP_PRESETS = [
+  ['晶圓代工', ['2330', '2303', '5347']], ['IC 設計', ['2454', '3034', '2379']], ['AI 伺服器', ['2382', '3231', '6669']],
+  ['航運三雄', ['2603', '2609', '2615']], ['金控', ['2881', '2882', '2891']], ['記憶體', ['2408', '2344', '2337']],
+  ['市值型 ETF', ['0050', '006208']], ['高股息 ETF', ['0056', '00878', '00919']],
+];
 let INDEX = null, LOCAL_LIST = [];
 
 const S = { mode: 'checking', days: 30, stocks: [], tab: null, charts: [], table: {}, kw: null };
@@ -84,7 +89,7 @@ function renderBanner() {
   const hours = (Date.now() - new Date(INDEX.updatedAt).getTime()) / 3600000;
   $('banner').innerHTML = hours > 36
     ? `<div class="banner warn"><b>追蹤清單資料已超過 ${Math.floor(hours / 24)} 天沒更新</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。請到 GitHub 的 Actions 分頁查看自動更新是否失敗。</div>`
-    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.filter((s) => !s.etf).length)} 檔股票＋${fmt(LOCAL_LIST.filter((s) => s.etf).length)} 檔 ETF。<b>★ 追蹤 ${nTracked} 檔</b>（成交值前 100 大個股＋前 10 大 ETF＋自選）：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取約 5～15 秒，使用金融字典法；查過的股票 12 小時內再查會秒開。</div>`;
+    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.filter((s) => !s.etf).length)} 檔股票＋${fmt(LOCAL_LIST.filter((s) => s.etf).length)} 檔 ETF。<b>★ 追蹤 ${nTracked} 檔</b>（成交值前 100 大個股＋前 10 大 ETF＋自選）：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取新聞（通常 10～30 秒），使用金融字典法；查過的股票 12 小時內再查會秒開。</div>`;
 }
 
 // ------------------------------------------------------------------ 搜尋與股票清單
@@ -125,6 +130,19 @@ function bindUI() {
   $('suggest').addEventListener('mousedown', (e) => { const b = e.target.closest('button'); if (b) { e.preventDefault(); submit(sugItems[+b.dataset.i].code); } });
   inp.addEventListener('blur', () => setTimeout(() => $('suggest').classList.remove('show'), 150));
   $('addBtn').onclick = () => submit(inp.value);
+  $('cmpBtn').onclick = () => {
+    const ok = S.stocks.filter((s) => s.status === 'ok').length;
+    const p = $('cmpPanel'); p.classList.toggle('show');
+    p.innerHTML = `<div class="cmp-head"><b>⇄ 多股比較</b>：一鍵比較同業，或在上方搜尋框加入 2～4 檔後按「比較目前的股票」。${S.stocks.length >= 2 ? ` <button class="primary sm" id="cmpNow">比較目前的 ${S.stocks.length} 檔</button>` : ''}</div>
+      <div class="cmp-presets">${CMP_PRESETS.map((g, i) => `<button data-i="${i}"><b>${g[0]}</b><span>${g[1].map((c) => (LOCAL_LIST.find((s) => s.code === c) || { name: c }).name).join('、')}</span></button>`).join('')}</div>
+      <p class="hint-line">比較內容：股價相對表現、每日聲量、情緒組成、各面向評分雷達圖、淨情緒走勢、綜合評分排名與配置建議。★ 追蹤股票秒開；其他股票需即時抓取（通常 10～30 秒）。</p>`;
+    if ($('cmpNow')) $('cmpNow').onclick = () => { p.classList.remove('show'); S.wantCompare = true; if (ok >= 2) { S.tab = 'compare'; render(); } };
+    p.querySelectorAll('.cmp-presets button').forEach((b) => (b.onclick = async () => {
+      p.classList.remove('show');
+      S.stocks = []; S.wantCompare = true; S.tab = null;
+      for (const c of CMP_PRESETS[+b.dataset.i][1]) addStock(c, true);
+    }));
+  };
   $('rangeGroup').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     document.querySelectorAll('#rangeGroup button').forEach((x) => x.classList.toggle('active', x === b));
@@ -174,6 +192,7 @@ async function load(st) {
     st.name = st.data.name; st.status = 'ok';
   } catch (e) { st.status = 'error'; st.error = e.message; }
   render();
+  if (S.wantCompare && S.stocks.filter((s) => s.status === 'ok').length >= Math.min(2, S.stocks.length) && !S.stocks.some((s) => s.status === 'loading')) { S.wantCompare = false; if (S.stocks.length >= 2) { S.tab = 'compare'; render(); } }
   if (st.status === 'ok' && st.source === 'live' && st.data.articles.some((a) => a.evidencePending)) {
     XLive.fetchEvidence(st.data, () => { if (S.tab === st.code) refreshTop(st); }).then(() => { if (S.tab === st.code) refreshTop(st); });
   }
@@ -351,11 +370,25 @@ function render() {
   if (S.tab === 'compare') return renderCompare(v);
   const st = S.stocks.find((s) => s.code === S.tab) || S.stocks[0];
   S.tab = st.code;
-  if (st.status === 'loading') { v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>${st.tracked ? `正在讀取「${esc(st.name)}」的資料…` : `「${esc(st.name)}」不在追蹤清單，正在即時抓取（約 20～60 秒）<br><small id="loadMsg">${esc(st.progress || '準備中…')}</small>`}</div>`; return; }
-  if (st.status === 'error') { v.innerHTML = `<div class="panel loading-box">無法取得「${esc(st.query)}」的資料：${esc(st.error)}<br><br><button class="secondary" onclick="retry('${esc(st.code)}')">重試</button></div>`; return; }
+  if (st.status === 'loading') {
+    v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>${st.tracked ? `正在讀取「${esc(st.name)}」的資料…` : `「${esc(st.name)}」不在追蹤清單，正在即時抓取新聞（通常 10～30 秒）<br><b id="loadTimer" style="font-size:20px">已等待 0 秒</b><br><small id="loadMsg">${esc(st.progress || '準備中…')}</small><br><small style="color:var(--faint)">結果出來後，熱門文章的「判斷依據」句子會再陸續補上</small>`}</div>`;
+    if (!st.tracked) { st.t0 = st.t0 || Date.now(); clearInterval(S.timer); S.timer = setInterval(() => { const el = $('loadTimer'); if (!el || st.status !== 'loading') return clearInterval(S.timer); el.textContent = `已等待 ${Math.round((Date.now() - st.t0) / 1000)} 秒`; }, 1000); }
+    return;
+  }
+  if (st.status === 'error') {
+    v.innerHTML = `<div class="panel box nodata"><h4>暫時抓不到「${esc(st.name)}」（${esc(st.code)}）的資料</h4>
+      <p class="sub">${esc(st.error)}</p>
+      <ul class="adv-list">
+        <li><b>最常見原因：免費公共轉址服務暫時失效或額度用完。</b>非追蹤股票的新聞要透過第三方免費服務抓取，這些服務每分鐘有次數限制，連續查很多檔就容易用完。<b>等約 1 分鐘後按「重新抓取」</b>通常就能恢復。</li>
+        <li>請確認代號是否正確（例如 2330、0050）。已下市或剛上市的股票可能沒有資料。</li>
+        <li>想立即查看：首頁「📊 市場總覽」裡的 ★ 追蹤股票（成交值前 100 大＋前 10 大 ETF）資料已預先抓好，不受影響、可秒開。</li>
+      </ul>
+      <button class="primary" onclick="retry('${esc(st.code)}', true)">重新抓取</button></div>`;
+    return;
+  }
   renderStock(v, st);
 }
-window.retry = (code) => { const s = S.stocks.find((x) => x.code === code); if (s) load(s); };
+window.retry = (code, fresh) => { const s = S.stocks.find((x) => x.code === code); if (!s) return; if (fresh) { delete LIVE_CACHE[code]; XLive.clearCache(code); } s.t0 = null; load(s); };
 
 function renderChips() {
   $('chips').innerHTML = S.stocks.map((s) => `<span class="chip ${s.status === 'loading' ? 'loading' : ''}"><i style="background:${s.color}"></i>${esc(s.name)} <small style="color:var(--muted)">${esc(s.code)}</small>${s.status === 'loading' ? ' …' : s.status === 'error' ? ' ⚠' : ''}<button aria-label="移除 ${esc(s.name)}" onclick="removeStock('${esc(s.code)}')">×</button></span>`).join('');
@@ -399,6 +432,33 @@ function artHTML(a) {
     ${why}${confBar}</div>`;
 }
 
+// 資料完整度：舊新聞是一週一週補抓的，還沒補到的日期要標示出來，避免看起來像「那幾天沒新聞」
+function coverageStart(d) {
+  if (d.mode === 'live') return null;
+  const bf = new Set(d.backfill || []), ref = refDate(d);
+  let m = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - ((ref.getDay() + 6) % 7));
+  let start = dkey(m);
+  for (;;) { m = new Date(m.getTime() - 7 * DAY); const k = dkey(m); if (!bf.has(k)) break; start = k; }
+  return start;
+}
+function dataNotes(st, d, a) {
+  const notes = [], live = st.source === 'live';
+  const why = {
+    'Google 新聞': '彙整多家媒體的主要管道', 'Yahoo 股市': '個股新聞', '鉅亨網': '財經新聞', 'PTT': '散戶討論', '股價': '股價資料',
+  };
+  (d.errors || []).forEach((e) => {
+    const src = e.split('：')[0];
+    notes.push(live
+      ? `<b>${esc(src)}</b>（${why[src] || '資料來源'}）這次沒抓到：免費公共轉址服務暫時失效或額度用完。約 1 分鐘後按下方「重新抓取」通常就能補上。`
+      : `<b>${esc(src)}</b> 在最近一次自動更新時沒抓到，已保留先前的資料，下次自動更新（每天約 08:17、18:17）會再試。`);
+  });
+  if (!a.total) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
+  else if (a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
+  if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔的資料，因此技術指標與部分評分無法計算。');
+  if (!notes.length) return '';
+  return `<section class="panel box nodata" style="margin-bottom:12px"><h4>ℹ️ 資料說明 <small>為什麼有些資料沒有出現</small></h4><ul class="adv-list">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>${live && (d.errors || []).length ? `<button class="secondary" onclick="retry('${esc(st.code)}', true)">重新抓取</button>` : ''}</section>`;
+}
+
 function renderStock(v, st) {
   const d = st.data, a = analyze(d, S.days), q = d.quote || {}, val = d.valuation || {}, t = a.tech, sc = a.score;
   const adv = adviceText(a);
@@ -410,13 +470,15 @@ function renderStock(v, st) {
       <h3>${esc(d.name)}<small>${esc(d.code)} · ${d.market === 'TPEx' ? '上櫃' : '上市'}${st.etf ? ' · ETF' : st.industry ? ' · ' + esc(st.industry) : ''}</small></h3>
       <div class="price-line">${q.price != null ? `<span class="price">${fmt(q.price, 2)}</span>${chgHTML(q.change, q.changePct)}` : '<span class="meta-small">無股價資料</span>'}</div>
       <div class="meta-small">${q.source ? `股價來源：${esc(q.source)}${q.time ? ' · ' + esc(String(q.time).slice(0, 16).replace('T', ' ')) : ''}` : ''}　情緒模型：${esc(d.model)}　資料：${esc(srcNote)}</div>
-      ${d.errors && d.errors.length ? `<div class="err-line">${st.source === 'live' ? '部分來源未取得' : '最近一次更新時部分來源未取得'}：${esc(d.errors.join('；'))}${st.source === 'live' ? '' : '（已保留先前資料）'}</div>` : ''}
+
     </div>
     <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
       <div class="val-grid"><div><span>本益比</span><b>${fmt(val.pe, 1)}</b></div><div><span>殖利率</span><b>${val.yield != null ? fmt(val.yield, 2) + '%' : '—'}</b></div><div><span>股價淨值比</span><b>${fmt(val.pb, 2)}</b></div></div>
       <button class="secondary" id="exportBtn">匯出分析摘要</button>
     </div>
   </section>
+
+  ${dataNotes(st, d, a)}
 
   <div class="cards">
     <div class="metric"><div class="label">總聲量</div><div class="value">${fmt(a.total)}</div><div class="hint">${pvol == null ? `近 ${a.days} 天文章數` : `較前期 ${pct(pvol, 0)}`}</div></div>
@@ -430,6 +492,7 @@ function renderStock(v, st) {
   <div class="grid g21">
     <section class="panel box">
       <h4>聲量與情緒趨勢 <small>每日文章數，依情緒堆疊</small></h4>
+      ${(() => { const cs = coverageStart(d); if (st.source === 'live') return '<p class="cov-note">即時抓取只能取得各來源「最新」約 100 篇文章，較早日期的文章數會偏少（不是那幾天沒有新聞）。★ 追蹤股票有完整的每日歷史。</p>'; if (cs && cs > a.dates[0]) return `<p class="cov-note">灰底區（${md(cs)} 以前）的舊新聞仍在逐週補抓中，文章數偏少不代表沒有新聞；每次自動更新都會補齊更多。</p>`; return ''; })()}
       <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
       <div class="chart md"><canvas id="cVolume"></canvas></div>
       <h4 style="margin-top:14px">同期間收盤價 <small>與上圖日期對齊；虛線為 20 日均線</small></h4>
@@ -517,7 +580,10 @@ function renderStock(v, st) {
 
   // ---- 圖表
   const labels = a.dates.map(md);
+  const cs = coverageStart(d), csIdx = cs && cs > a.dates[0] ? a.dates.findIndex((k) => k >= cs) : -1;
+  const shade = { id: 'cov', beforeDatasetsDraw(c) { if (csIdx <= 0) return; const { ctx, chartArea: r, scales: { x } } = c; const xe = (x.getPixelForValue(csIdx - 1) + x.getPixelForValue(csIdx)) / 2; ctx.save(); ctx.fillStyle = 'rgba(20,33,61,0.06)'; ctx.fillRect(r.left, r.top, xe - r.left, r.bottom - r.top); ctx.fillStyle = '#8a92a3'; ctx.font = '11px sans-serif'; ctx.fillText('舊新聞補抓中', r.left + 6, r.top + 12); ctx.restore(); } };
   chart('cVolume', {
+    plugins: [shade],
     type: 'bar',
     data: { labels, datasets: ['pos', 'neu', 'neg'].map((k) => ({ label: SENT[k].name, data: a.dates.map((x) => a.daily[x][k]), backgroundColor: SENT[k].color, borderColor: '#fff', borderWidth: { top: 1 }, borderRadius: 2, maxBarThickness: 22 })) },
     options: { interaction: { mode: 'index', intersect: false }, scales: { x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 10 } }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: '篇' } } },
