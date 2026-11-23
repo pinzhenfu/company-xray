@@ -37,6 +37,20 @@ def title_key(t: str) -> str:
     return re.sub(r"[\s\W_]+", "", t)[:40]
 
 
+def backfill_weeks(now: datetime, done: set[str], days: int = 91) -> list[tuple[str, str]]:
+    """近 90 天內「已結束」的每一週（週一到下週一），排除已回填的，由近到遠排列。"""
+    out = []
+    monday = (now - timedelta(days=now.weekday())).date()   # 本週一
+    start = monday - timedelta(days=7)
+    limit = (now - timedelta(days=days)).date()
+    while start + timedelta(days=7) > limit:
+        s = start.isoformat()
+        if s not in done:
+            out.append((s, (start + timedelta(days=7)).isoformat()))
+        start -= timedelta(days=7)
+    return out
+
+
 def recanon(arts: list[dict]) -> list[dict]:
     """舊資料也套用知名媒體白名單（舊版資料沒有分類）。"""
     out = []
@@ -83,9 +97,16 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
         stock["name"] = name
     path = OUT / "s" / f"{stock['code']}.json"
     old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-    days = 14 if old else 90
+    days = 4 if old else 90
 
     new = await sources.collect(stock, days)
+    # 回填：每次往回補最多 BACKFILL_WEEKS 週（由近到遠），幾次更新後 90 天都會有資料
+    done = set((old or {}).get("backfill", []))
+    weeks = backfill_weeks(now, done)[: int(os.getenv("BACKFILL_WEEKS", "5"))]
+    for start, end in weeks:
+        new["articles"] += await sources.google_news_range(stock["name"], stock["code"], start, end)
+        done.add(start)
+        await asyncio.sleep(0.8)
     # 合併文章：舊的保留（含已算好的情緒），只對新文章跑模型
     known_ids = {a["id"] for a in old["articles"]} if old else set()
     known_titles = {title_key(a["title"]) for a in old["articles"]} if old else set()
@@ -105,10 +126,11 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
         "quote": new["quote"] or (old or {}).get("quote", {}),
         "valuation": new["valuation"] if any(v is not None for v in new["valuation"].values()) else (old or {}).get("valuation", {}),
         "errors": new["errors"], "model": model or "—", "days": KEEP_DAYS,
+        "backfill": sorted(d for d in done if d >= (now - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")),
         "fetchedAt": now.isoformat(timespec="seconds"), "mode": "daily",
     }
     path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}、累積 {len(articles)}、內文 {bodies} 篇、股價 {len(data['prices'])} 天"
+    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}（回填 {len(weeks)} 週）、累積 {len(articles)}、內文 {bodies} 篇、股價 {len(data['prices'])} 天"
           + (f"（{'；'.join(new['errors'])}）" if new["errors"] else ""))
     return data
 
