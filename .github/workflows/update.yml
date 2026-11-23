@@ -18,10 +18,14 @@ concurrency:
   group: update-and-deploy
   cancel-in-progress: false
 
+env:
+  AUTO_TOP: "100"   # 自動追蹤成交值前幾大個股
+  AUTO_ETF: "10"    # 自動追蹤成交值前幾大 ETF
+
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -41,17 +45,31 @@ jobs:
           path: ~/.cache/huggingface
           key: finbert-tone-chinese-v1
 
+      - name: 取回上次的資料（存在 data 分支）
+        run: |
+          if git fetch origin data --depth=1 2>/dev/null; then
+            mkdir -p site/data
+            git archive FETCH_HEAD | tar -x -C site/data
+            echo "已取回上次資料"
+          else
+            echo "第一次執行，沒有舊資料"
+          fi
+
       - name: 抓資料、跑 FinBERT
         run: python update_data.py
 
-      - name: 把新資料存回專案
+      - name: 把資料存到 data 分支（只保留最新一份，專案不會越來越大）
         run: |
+          cd site/data
+          printf 'p/\n' > .gitignore
+          git init -q
+          git checkout -q -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add site/data
-          git diff --cached --quiet || git commit -m "自動更新資料 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
-          git pull --rebase --autostash || true
-          git push
+          git add -A
+          git commit -q -m "資料更新 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
+          rm -rf .git
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
