@@ -60,12 +60,13 @@ async function init() {
   bindUI();
   await XLive.loadMedia();
   try { INDEX = await getJSON('data/index.json?t=' + Date.now(), 10000); } catch (e) { INDEX = null; }
-  let all = [];
+  let all = [], light = {};
   try { all = await getJSON('data/all_stocks.json', 15000); } catch (e) {}
+  try { light = (await getJSON('data/light.json?t=' + Date.now(), 15000)).stocks || {}; } catch (e) {}
   const tracked = new Map(((INDEX && INDEX.stocks) || []).map((s) => [s.code, s]));
   const list = all.map((s) => ({ code: s.c, name: s.n, market: s.m === 'O' ? 'TPEx' : 'TWSE', etf: s.t === 'E' || /^00/.test(s.c), industry: s.i || '' }));
   tracked.forEach((s) => { if (!list.some((x) => x.code === s.code)) list.push({ code: s.code, name: s.name, market: s.market, etf: s.type === 'ETF', industry: s.industry }); });
-  list.forEach((s) => { const t = tracked.get(s.code); if (t) Object.assign(s, { tracked: true, price: t.price, articles: t.articles, industry: t.industry || s.industry }); });
+  list.forEach((s) => { const t = tracked.get(s.code); if (t) Object.assign(s, { tracked: true, price: t.price, articles: t.articles, industry: t.industry || s.industry }); else if (light[s.code]) Object.assign(s, { light: true, lu: light[s.code][0], articles: light[s.code][1] }); });
   LOCAL_LIST = list.sort((a, b) => (b.tracked ? 1 : 0) - (a.tracked ? 1 : 0) || a.code.localeCompare(b.code));
   S.mode = tracked.size ? 'daily' : 'live-only';
   renderPills(); renderBanner();
@@ -89,7 +90,7 @@ function renderBanner() {
   const hours = (Date.now() - new Date(INDEX.updatedAt).getTime()) / 3600000;
   $('banner').innerHTML = hours > 36
     ? `<div class="banner warn"><b>追蹤清單資料已超過 ${Math.floor(hours / 24)} 天沒更新</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。請到 GitHub 的 Actions 分頁查看自動更新是否失敗。</div>`
-    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.filter((s) => !s.etf).length)} 檔股票＋${fmt(LOCAL_LIST.filter((s) => s.etf).length)} 檔 ETF。<b>★ 追蹤 ${nTracked} 檔</b>（成交值前 100 大個股＋前 10 大 ETF＋自選）：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取新聞（通常 10～30 秒），使用金融字典法；查過的股票 12 小時內再查會秒開。</div>`;
+    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.filter((s) => !s.etf).length)} 檔股票＋${fmt(LOCAL_LIST.filter((s) => s.etf).length)} 檔 ETF，<b>每天自動更新、FinBERT 分析、秒開</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>★ 熱門 ${nTracked} 檔</b>（成交值前 100 大＋前 10 大 ETF＋自選）一天更新兩次，並讀取內文找出判斷依據；<b>其他 ${fmt(LOCAL_LIST.filter((s) => s.light).length)} 檔</b>一天更新一次、依標題判斷。${LOCAL_LIST.some((s) => !s.tracked && !s.light) ? `少數尚未輪到更新的股票，查詢時會即時抓取（通常 10～30 秒）。` : ''}</div>`;
 }
 
 // ------------------------------------------------------------------ 搜尋與股票清單
@@ -105,7 +106,7 @@ function showSuggest(items, q) {
   sugItems = items; sugIdx = -1;
   const box = $('suggest');
   box.innerHTML = (q ? '' : '<div style="padding:8px 13px 4px;font-size:12px;color:var(--faint)">★ 追蹤清單（秒開）。輸入代號或名稱可搜尋全部股票與 ETF</div>')
-    + items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.etf ? 'ETF · ' : s.industry ? esc(s.industry) + ' · ' : ''}${s.tracked ? `★ 每日 FinBERT${s.price != null ? ' · ' + fmt(s.price, 2) : ''}` : `即時抓取 · ${s.market === 'TPEx' ? '上櫃' : '上市'}`}</small></button>`).join('')
+    + items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.etf ? 'ETF · ' : s.industry ? esc(s.industry) + ' · ' : ''}${s.tracked ? `★ 熱門・FinBERT${s.price != null ? ' · ' + fmt(s.price, 2) : ''}` : s.light ? `每日更新・FinBERT・${s.articles} 篇` : `尚未更新・即時抓取`}</small></button>`).join('')
     || (q ? `<div style="padding:10px 13px;font-size:13px;color:var(--muted)">找不到「${esc(q)}」。${/^\d{4,6}[A-Z]?$/i.test(q) ? '按 Enter 仍可嘗試以此代號即時抓取。' : '請確認名稱或改輸入股票代號。'}</div>` : '');
   box.classList.toggle('show', !!box.innerHTML);
 }
@@ -163,7 +164,7 @@ async function addStock(q, silent) {
   if (S.stocks.some((s) => s.code === local.code)) { S.tab = local.code; render(); return; }
   if (S.stocks.length >= MAX_STOCKS) return toast(`最多比較 ${MAX_STOCKS} 檔，請先移除一檔`);
   const used = new Set(S.stocks.map((s) => s.color));
-  const st = { code: local.code, name: local.name, market: local.market, etf: !!local.etf, industry: local.industry || '', tracked: !!local.tracked, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null, progress: '' };
+  const st = { code: local.code, name: local.name, market: local.market, etf: !!local.etf, industry: local.industry || '', tracked: !!local.tracked, light: !!local.light, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null, progress: '' };
   S.stocks.push(st); S.tab = st.code;
   render();
   await load(st);
@@ -180,9 +181,15 @@ async function load(st) {
   st.status = 'loading'; st.progress = ''; renderChips();
   if (S.tab === st.code) render();
   try {
-    if (st.tracked) {
-      st.data = await getJSON(`data/s/${encodeURIComponent(st.code)}.json?t=${encodeURIComponent(INDEX.updatedAt)}`, 20000);
-      st.source = 'daily';
+    let daily = null;
+    if (st.tracked || st.light) {
+      try { daily = await getJSON(`data/s/${encodeURIComponent(st.code)}.json?t=${encodeURIComponent(INDEX ? INDEX.updatedAt : Date.now())}`, 20000); } catch (e) { daily = null; }
+    }
+    if (daily) {
+      // 輕量更新的股票：股價與估值另外從每日股價檔讀取
+      if (!daily.prices || !daily.prices.length) { try { const pr = await XLive.ownPrices(st.code); Object.assign(daily, { prices: pr.rows, quote: pr.quote, market: daily.market || pr.market }); } catch (e) {} }
+      if (!daily.valuation || !Object.keys(daily.valuation).length) daily.valuation = await XLive.valuation(st.code);
+      st.data = daily; st.source = 'daily';
     } else {
       const hit = LIVE_CACHE[st.code];
       st.data = hit && Date.now() - hit.t < 15 * 60000 ? hit.d : await XLive.collect(st, (msg) => { st.progress = msg; const el = $('loadMsg'); if (el && S.tab === st.code) el.textContent = msg; });
@@ -247,7 +254,7 @@ function analyze(d, days) {
     const g = cur.filter((a) => a.sentiment === s);
     const hasViews = g.some((a) => a.views != null);
     g.sort(hasViews ? (a, b) => (b.views ?? -1) - (a.views ?? -1) || b.t - a.t : (a, b) => b.t - a.t);
-    return { list: g.slice(0, 5), basis: (hasViews ? '依瀏覽量排序' : '來源未提供瀏覽量，依發布時間排序（最新五篇）') + '。判斷依據為內文逐句分析後最具代表性的句子。' };
+    return { list: g.slice(0, 5), basis: (hasViews ? '依瀏覽量排序' : '來源未提供瀏覽量，依發布時間排序（最新五篇）') + (d.tier === 'light' ? '。此股票每日輕量更新，判斷依據為標題的情緒分析。' : '。判斷依據為內文逐句分析後最具代表性的句子。') };
   };
 
   const tech = technicals(d.prices);
@@ -433,7 +440,7 @@ function artHTML(a) {
     why = `<div class="evi"><div class="evi-h">判斷依據：從內文 ${a.nSentences} 句中，最能代表「${SENT[lab].name}」的句子</div><ol>${a.evidence.map((e) => `<li>「${markHits(e.text, e.hits)}」<span class="badge ${e.label}">${SENT[e.label].name} ${Math.round(e.p * 100)}%</span></li>`).join('')}</ol>
       <div class="evi-f">整篇判定：${SENT[lab].name} ${Math.round((sc[lab] || 0) * 100)}%（標題 40%＋內文各句平均 60%）· ${a.model === 'finbert' ? 'FinBERT' : '字典法'}</div></div>`;
   } else {
-    const reason = a.bodyTried ? '無法擷取此篇內文' : a.url.includes('news.google.com') ? '此來源僅提供標題' : '此篇未分析內文';
+    const reason = a.lite ? '此股票為每日輕量更新，只分析標題' : a.bodyTried ? '無法擷取此篇內文' : a.url.includes('news.google.com') ? '此來源僅提供標題' : '此篇未分析內文';
     why = `<div class="evi"><div class="evi-h">判斷依據（${reason}，依標題判斷）</div><ol><li>「${markHits(a.title, a.hints)}」<span class="badge ${lab}">${SENT[lab].name} ${Math.round((sc[lab] || 0) * 100)}%</span></li></ol></div>`;
   }
   return `<div class="art ${lab}">
@@ -466,6 +473,7 @@ function dataNotes(st, d, a) {
   }
   if (failed.includes('股價') && (!d.prices || !d.prices.length)) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔股票的資料，因此技術指標與部分評分無法計算。');
   else if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市或暫停交易，因此技術指標與部分評分無法計算。');
+  if (d.tier === 'light' && a.total) notes.push(`這檔股票不在熱門清單，<b>每天更新一次</b>（最後更新 ${fmtTime(d.fetchedAt)}），新聞來自 Google 新聞的 24 家知名媒體，並用 FinBERT 判斷<b>標題</b>情緒（熱門股才會另外讀取內文找判斷依據）。`);
   if (!a.total && !allNewsFailed) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
   else if (a.total && a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
   if (!notes.length) return '';

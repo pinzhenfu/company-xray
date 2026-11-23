@@ -280,5 +280,5 @@ window.XLive = (() => {
   }
   const resetProxies = () => { PROXIES.forEach((p) => { ST[p.name].cool = 0; ST[p.name].score = Math.max(ST[p.name].score, 0); }); saveST(); };
   const clearCache = (code) => { try { localStorage.removeItem(CACHE_KEY(code)); } catch (e) {} };
-  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache, resetProxies };
+  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache, resetProxies, ownPrices, valuation };
 })();
