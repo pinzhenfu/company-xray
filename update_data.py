@@ -37,18 +37,61 @@ def title_key(t: str) -> str:
     return re.sub(r"[\s\W_]+", "", t)[:40]
 
 
-def backfill_weeks(now: datetime, done: set[str], days: int = 91) -> list[tuple[str, str]]:
-    """近 90 天內「已結束」的每一週（週一到下週一），排除已回填的，由近到遠排列。"""
-    out = []
-    monday = (now - timedelta(days=now.weekday())).date()   # 本週一
-    start = monday - timedelta(days=7)
-    limit = (now - timedelta(days=days)).date()
-    while start + timedelta(days=7) > limit:
-        s = start.isoformat()
-        if s not in done:
-            out.append((s, (start + timedelta(days=7)).isoformat()))
-        start -= timedelta(days=7)
-    return out
+CAP = 80          # Google 一次最多約 100 篇；過濾前超過 80 篇就視為被截斷，改逐日查
+HISTORY_DAYS = 98   # 多抓一週，確保 90 天區間最前面那週也完整
+
+
+async def backfill(stock: dict, now: datetime, donedays: set[str], sink: list) -> int:
+    """補齊近 90 天每一天的 Google 新聞，回傳這次完成的天數。"""
+    today = now.date()
+    days = [(today - timedelta(days=i)) for i in range(HISTORY_DAYS)]
+    recent = {today.isoformat(), (today - timedelta(days=1)).isoformat()}
+    need = [d for d in days if d.isoformat() not in donedays or d.isoformat() in recent]
+    # 依週分組（週一開頭），整週都需要且已結束的先試「一週一次」
+    weeks: dict = {}
+    for d in need:
+        weeks.setdefault(d - timedelta(days=d.weekday()), []).append(d)
+    finished = 0
+    name, code = stock["name"], stock["code"]
+
+    async def one_day(d) -> bool:
+        res = await sources.google_news_range(name, code, d.isoformat(), (d + timedelta(days=1)).isoformat())
+        await asyncio.sleep(0.4)
+        if res is None:
+            return False
+        sink.extend(res[0])
+        return True
+
+    for monday in sorted(weeks, reverse=True):   # 由近到遠
+        ds = weeks[monday]
+        whole_past_week = len(ds) == 7 and monday + timedelta(days=7) <= today - timedelta(days=1)
+        if whole_past_week:
+            res = await sources.google_news_range(name, code, monday.isoformat(), (monday + timedelta(days=7)).isoformat())
+            await asyncio.sleep(0.4)
+            if res is None:
+                continue
+            items, raw = res
+            sink.extend(items)
+            if raw < CAP:          # 沒被截斷：整週完成
+                for d in ds:
+                    donedays.add(d.isoformat())
+                finished += 7
+                continue
+        for d in ds:                # 被截斷或本週：逐日查
+            if await one_day(d) and d.isoformat() not in recent:
+                donedays.add(d.isoformat())
+                finished += 1
+    return finished
+
+
+def weeks_from_days(donedays: set[str]) -> list[str]:
+    """把已完成的日子換算成「整週都完成」的週一清單（給網頁標示資料完整度用）。"""
+    from datetime import date
+    mondays = {}
+    for s in donedays:
+        d = date.fromisoformat(s)
+        mondays.setdefault((d - timedelta(days=d.weekday())).isoformat(), set()).add(s)
+    return sorted(m for m, v in mondays.items() if len(v) == 7)
 
 
 def recanon(arts: list[dict]) -> list[dict]:
@@ -100,15 +143,11 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
     days = 4 if old else 90
 
     new = await sources.collect(stock, days)
-    # 回填：一次補完近 90 天（13 週）；已補過的週不再重抓，所以之後的更新只會補新結束的那一週
-    done = set((old or {}).get("backfill", []))
-    weeks = backfill_weeks(now, done)[: int(os.getenv("BACKFILL_WEEKS", "13"))]
-    for start, end in weeks:
-        got = await sources.google_news_range(stock["name"], stock["code"], start, end)
-        if got is not None:
-            new["articles"] += got
-            done.add(start)
-        await asyncio.sleep(0.6)
+    # 回填（逐日補齊近 90 天）：先一週查一次；那週結果接近 Google 上限（約 100 篇）就改成那 7 天每天各查一次，
+    # 這樣新聞多的股票舊日子不會被截斷。已補完的日子記在 donedays，之後不再重抓；今天與昨天每次都重查。
+    donedays = set((old or {}).get("donedays", []))
+    bf_days = await backfill(stock, now, donedays, new["articles"])
+
     # 合併文章：舊的保留（含已算好的情緒），只對新文章跑模型
     known_ids = {a["id"] for a in old["articles"]} if old else set()
     known_titles = {title_key(a["title"]) for a in old["articles"]} if old else set()
@@ -128,11 +167,12 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
         "quote": new["quote"] or (old or {}).get("quote", {}),
         "valuation": new["valuation"] if any(v is not None for v in new["valuation"].values()) else (old or {}).get("valuation", {}),
         "errors": new["errors"], "model": model or "—", "days": KEEP_DAYS,
-        "backfill": sorted(d for d in done if d >= (now - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")),
+        "donedays": sorted(d for d in donedays if d >= (now - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")),
+        "backfill": weeks_from_days(donedays | {now.date().isoformat(), (now.date() - timedelta(days=1)).isoformat()}),
         "fetchedAt": now.isoformat(timespec="seconds"), "mode": "daily",
     }
     path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}（回填 {len(weeks)} 週）、累積 {len(articles)}、內文 {bodies} 篇、股價 {len(data['prices'])} 天"
+    print(f"  ✓ {stock['code']} {stock['name']}：新文章 {len(fresh)}（逐日補抓 {bf_days} 天）、累積 {len(articles)}、內文 {bodies} 篇、股價 {len(data['prices'])} 天"
           + (f"（{'；'.join(new['errors'])}）" if new["errors"] else ""))
     return data
 
