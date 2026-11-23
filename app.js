@@ -14,6 +14,11 @@ const SENT = {
 };
 const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'];   // 多股比較：顏色跟著股票走，不跟排名
 const MAX_STOCKS = 4;
+const CMP_PRESETS = [
+  ['晶圓代工', ['2330', '2303', '5347']], ['IC 設計', ['2454', '3034', '2379']], ['AI 伺服器', ['2382', '3231', '6669']],
+  ['航運三雄', ['2603', '2609', '2615']], ['金控', ['2881', '2882', '2891']], ['記憶體', ['2408', '2344', '2337']],
+  ['市值型 ETF', ['0050', '006208']], ['高股息 ETF', ['0056', '00878', '00919']],
+];
 let INDEX = null, LOCAL_LIST = [];
 
 const S = { mode: 'checking', days: 30, stocks: [], tab: null, charts: [], table: {}, kw: null };
@@ -58,14 +63,15 @@ async function init() {
   let all = [];
   try { all = await getJSON('data/all_stocks.json', 15000); } catch (e) {}
   const tracked = new Map(((INDEX && INDEX.stocks) || []).map((s) => [s.code, s]));
-  const list = all.map((s) => ({ code: s.c, name: s.n, market: s.m === 'O' ? 'TPEx' : 'TWSE' }));
-  tracked.forEach((s) => { if (!list.some((x) => x.code === s.code)) list.push({ code: s.code, name: s.name, market: s.market }); });
-  list.forEach((s) => { const t = tracked.get(s.code); if (t) Object.assign(s, { tracked: true, price: t.price, articles: t.articles }); });
+  const list = all.map((s) => ({ code: s.c, name: s.n, market: s.m === 'O' ? 'TPEx' : 'TWSE', etf: s.t === 'E' || /^00/.test(s.c), industry: s.i || '' }));
+  tracked.forEach((s) => { if (!list.some((x) => x.code === s.code)) list.push({ code: s.code, name: s.name, market: s.market, etf: s.type === 'ETF', industry: s.industry }); });
+  list.forEach((s) => { const t = tracked.get(s.code); if (t) Object.assign(s, { tracked: true, price: t.price, articles: t.articles, industry: t.industry || s.industry }); });
   LOCAL_LIST = list.sort((a, b) => (b.tracked ? 1 : 0) - (a.tracked ? 1 : 0) || a.code.localeCompare(b.code));
   S.mode = tracked.size ? 'daily' : 'live-only';
   renderPills(); renderBanner();
-  const first = params.get('s') ? params.get('s').split(',') : [tracked.has('2330') || !tracked.size ? '2330' : [...tracked.keys()][0]];
-  for (const q of first.slice(0, MAX_STOCKS)) await addStock(q, true);
+  if (params.get('s')) { for (const q of params.get('s').split(',').slice(0, MAX_STOCKS)) await addStock(q, true); }
+  else if (tracked.size) { S.tab = 'market'; render(); }
+  else await addStock('2330', true);
 }
 
 const fmtTime = (iso) => { if (!iso) return '—'; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
@@ -83,7 +89,7 @@ function renderBanner() {
   const hours = (Date.now() - new Date(INDEX.updatedAt).getTime()) / 3600000;
   $('banner').innerHTML = hours > 36
     ? `<div class="banner warn"><b>追蹤清單資料已超過 ${Math.floor(hours / 24)} 天沒更新</b>（最後更新 ${fmtTime(INDEX.updatedAt)}）。請到 GitHub 的 Actions 分頁查看自動更新是否失敗。</div>`
-    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.length)} 檔台股。<b>★ 追蹤清單 ${nTracked} 檔</b>：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取，約 20～60 秒，使用金融字典法。</div>`;
+    : `<div class="banner info">可查詢全部 ${fmt(LOCAL_LIST.filter((s) => !s.etf).length)} 檔股票＋${fmt(LOCAL_LIST.filter((s) => s.etf).length)} 檔 ETF。<b>★ 追蹤 ${nTracked} 檔</b>（成交值前 100 大個股＋前 10 大 ETF＋自選）：每天自動更新、FinBERT 分析、秒開（最後更新 ${fmtTime(INDEX.updatedAt)}）。<b>其他股票</b>：查詢時即時抓取新聞（通常 10～30 秒），使用金融字典法；查過的股票 12 小時內再查會秒開。</div>`;
 }
 
 // ------------------------------------------------------------------ 搜尋與股票清單
@@ -98,8 +104,8 @@ function localMatch(q) {
 function showSuggest(items, q) {
   sugItems = items; sugIdx = -1;
   const box = $('suggest');
-  box.innerHTML = (q ? '' : '<div style="padding:8px 13px 4px;font-size:12px;color:var(--faint)">★ 追蹤清單（秒開）。輸入代號或名稱可搜尋全部台股</div>')
-    + items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.tracked ? `★ 每日 FinBERT${s.price != null ? ' · ' + fmt(s.price, 2) : ''}` : `即時抓取 · ${s.market === 'TPEx' ? '上櫃' : '上市'}`}</small></button>`).join('')
+  box.innerHTML = (q ? '' : '<div style="padding:8px 13px 4px;font-size:12px;color:var(--faint)">★ 追蹤清單（秒開）。輸入代號或名稱可搜尋全部股票與 ETF</div>')
+    + items.map((s, i) => `<button data-i="${i}"><b>${esc(s.code)}</b>${esc(s.name)}<small>${s.etf ? 'ETF · ' : s.industry ? esc(s.industry) + ' · ' : ''}${s.tracked ? `★ 每日 FinBERT${s.price != null ? ' · ' + fmt(s.price, 2) : ''}` : `即時抓取 · ${s.market === 'TPEx' ? '上櫃' : '上市'}`}</small></button>`).join('')
     || (q ? `<div style="padding:10px 13px;font-size:13px;color:var(--muted)">找不到「${esc(q)}」。${/^\d{4,6}[A-Z]?$/i.test(q) ? '按 Enter 仍可嘗試以此代號即時抓取。' : '請確認名稱或改輸入股票代號。'}</div>` : '');
   box.classList.toggle('show', !!box.innerHTML);
 }
@@ -124,6 +130,19 @@ function bindUI() {
   $('suggest').addEventListener('mousedown', (e) => { const b = e.target.closest('button'); if (b) { e.preventDefault(); submit(sugItems[+b.dataset.i].code); } });
   inp.addEventListener('blur', () => setTimeout(() => $('suggest').classList.remove('show'), 150));
   $('addBtn').onclick = () => submit(inp.value);
+  $('cmpBtn').onclick = () => {
+    const ok = S.stocks.filter((s) => s.status === 'ok').length;
+    const p = $('cmpPanel'); p.classList.toggle('show');
+    p.innerHTML = `<div class="cmp-head"><b>⇄ 多股比較</b>：一鍵比較同業，或在上方搜尋框加入 2～4 檔後按「比較目前的股票」。${S.stocks.length >= 2 ? ` <button class="primary sm" id="cmpNow">比較目前的 ${S.stocks.length} 檔</button>` : ''}</div>
+      <div class="cmp-presets">${CMP_PRESETS.map((g, i) => `<button data-i="${i}"><b>${g[0]}</b><span>${g[1].map((c) => (LOCAL_LIST.find((s) => s.code === c) || { name: c }).name).join('、')}</span></button>`).join('')}</div>
+      <p class="hint-line">比較內容：股價相對表現、每日聲量、情緒組成、各面向評分雷達圖、淨情緒走勢、綜合評分排名與配置建議。★ 追蹤股票秒開；其他股票需即時抓取（通常 10～30 秒）。</p>`;
+    if ($('cmpNow')) $('cmpNow').onclick = () => { p.classList.remove('show'); S.wantCompare = true; if (ok >= 2) { S.tab = 'compare'; render(); } };
+    p.querySelectorAll('.cmp-presets button').forEach((b) => (b.onclick = async () => {
+      p.classList.remove('show');
+      S.stocks = []; S.wantCompare = true; S.tab = null;
+      for (const c of CMP_PRESETS[+b.dataset.i][1]) addStock(c, true);
+    }));
+  };
   $('rangeGroup').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     document.querySelectorAll('#rangeGroup button').forEach((x) => x.classList.toggle('active', x === b));
@@ -144,7 +163,7 @@ async function addStock(q, silent) {
   if (S.stocks.some((s) => s.code === local.code)) { S.tab = local.code; render(); return; }
   if (S.stocks.length >= MAX_STOCKS) return toast(`最多比較 ${MAX_STOCKS} 檔，請先移除一檔`);
   const used = new Set(S.stocks.map((s) => s.color));
-  const st = { code: local.code, name: local.name, market: local.market, tracked: !!local.tracked, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null, progress: '' };
+  const st = { code: local.code, name: local.name, market: local.market, etf: !!local.etf, industry: local.industry || '', tracked: !!local.tracked, query: local.code, color: SERIES.find((c) => !used.has(c)), status: 'loading', data: null, error: null, progress: '' };
   S.stocks.push(st); S.tab = st.code;
   render();
   await load(st);
@@ -152,7 +171,7 @@ async function addStock(q, silent) {
 
 function removeStock(code) {
   S.stocks = S.stocks.filter((s) => s.code !== code);
-  if (S.tab === code || (S.tab === 'compare' && S.stocks.length < 2)) S.tab = S.stocks[0] ? S.stocks[0].code : null;
+  if (S.tab === code || (S.tab === 'compare' && S.stocks.length < 2)) S.tab = S.stocks[0] ? S.stocks[0].code : INDEX ? 'market' : null;
   render();
 }
 
@@ -173,6 +192,10 @@ async function load(st) {
     st.name = st.data.name; st.status = 'ok';
   } catch (e) { st.status = 'error'; st.error = e.message; }
   render();
+  if (S.wantCompare && S.stocks.filter((s) => s.status === 'ok').length >= Math.min(2, S.stocks.length) && !S.stocks.some((s) => s.status === 'loading')) { S.wantCompare = false; if (S.stocks.length >= 2) { S.tab = 'compare'; render(); } }
+  if (st.status === 'ok' && st.source === 'live' && st.data.articles.some((a) => a.evidencePending)) {
+    XLive.fetchEvidence(st.data, () => { if (S.tab === st.code) refreshTop(st); }).then(() => { if (S.tab === st.code) refreshTop(st); });
+  }
 }
 
 // ------------------------------------------------------------------ 分析核心
@@ -233,6 +256,7 @@ function analyze(d, days) {
   const r7 = cnt(recent7);
   const net7 = recent7.length ? ((r7.pos - r7.neg) / recent7.length) * 100 : null;
   const res = { d, ref, days, cur, prev, c, pc, total, net, pnet, favor, dates, daily, sources, channels, words, hotPos: hot('pos'), hotNeg: hot('neg'), topPos: top('pos'), topNeg: top('neg'), tech, corr, net7 };
+  res.esg = esgAnalyze(cur);
   res.score = scoreIt(res);
   return res;
 }
@@ -340,22 +364,38 @@ function chart(id, cfg) { const el = $(id); if (el && window.Chart) S.charts.pus
 function render() {
   renderChips(); renderTabs(); destroyCharts();
   const v = $('view');
+  v.onclick = null;
+  if (S.tab === 'market' && INDEX) return renderMarket(v);
   if (!S.stocks.length) { v.innerHTML = '<div class="empty">輸入一檔股票開始健檢。</div>'; return; }
   if (S.tab === 'compare') return renderCompare(v);
   const st = S.stocks.find((s) => s.code === S.tab) || S.stocks[0];
   S.tab = st.code;
-  if (st.status === 'loading') { v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>${st.tracked ? `正在讀取「${esc(st.name)}」的資料…` : `「${esc(st.name)}」不在追蹤清單，正在即時抓取（約 20～60 秒）<br><small id="loadMsg">${esc(st.progress || '準備中…')}</small>`}</div>`; return; }
-  if (st.status === 'error') { v.innerHTML = `<div class="panel loading-box">無法取得「${esc(st.query)}」的資料：${esc(st.error)}<br><br><button class="secondary" onclick="retry('${esc(st.code)}')">重試</button></div>`; return; }
+  if (st.status === 'loading') {
+    v.innerHTML = `<div class="panel loading-box"><div class="spinner"></div>${st.tracked ? `正在讀取「${esc(st.name)}」的資料…` : `「${esc(st.name)}」不在追蹤清單，正在即時抓取新聞（通常 10～30 秒）<br><b id="loadTimer" style="font-size:20px">已等待 0 秒</b><br><small id="loadMsg">${esc(st.progress || '準備中…')}</small><br><small style="color:var(--faint)">結果出來後，熱門文章的「判斷依據」句子會再陸續補上</small>`}</div>`;
+    if (!st.tracked) { st.t0 = st.t0 || Date.now(); clearInterval(S.timer); S.timer = setInterval(() => { const el = $('loadTimer'); if (!el || st.status !== 'loading') return clearInterval(S.timer); el.textContent = `已等待 ${Math.round((Date.now() - st.t0) / 1000)} 秒`; }, 1000); }
+    return;
+  }
+  if (st.status === 'error') {
+    v.innerHTML = `<div class="panel box nodata"><h4>暫時抓不到「${esc(st.name)}」（${esc(st.code)}）的資料</h4>
+      <p class="sub">${esc(st.error)}</p>
+      <ul class="adv-list">
+        <li><b>最常見原因：免費公共轉址服務暫時失效或額度用完。</b>非追蹤股票的新聞要透過第三方免費服務抓取，這些服務每分鐘有次數限制，連續查很多檔就容易用完。<b>等約 1 分鐘後按「重新抓取」</b>通常就能恢復。</li>
+        <li>請確認代號是否正確（例如 2330、0050）。已下市或剛上市的股票可能沒有資料。</li>
+        <li>想立即查看：首頁「📊 市場總覽」裡的 ★ 追蹤股票（成交值前 100 大＋前 10 大 ETF）資料已預先抓好，不受影響、可秒開。</li>
+      </ul>
+      <button class="primary" onclick="retry('${esc(st.code)}', true)">重新抓取</button></div>`;
+    return;
+  }
   renderStock(v, st);
 }
-window.retry = (code) => { const s = S.stocks.find((x) => x.code === code); if (s) load(s); };
+window.retry = (code, fresh) => { const s = S.stocks.find((x) => x.code === code); if (!s) return; if (fresh) { delete LIVE_CACHE[code]; XLive.clearCache(code); } s.t0 = null; load(s); };
 
 function renderChips() {
   $('chips').innerHTML = S.stocks.map((s) => `<span class="chip ${s.status === 'loading' ? 'loading' : ''}"><i style="background:${s.color}"></i>${esc(s.name)} <small style="color:var(--muted)">${esc(s.code)}</small>${s.status === 'loading' ? ' …' : s.status === 'error' ? ' ⚠' : ''}<button aria-label="移除 ${esc(s.name)}" onclick="removeStock('${esc(s.code)}')">×</button></span>`).join('');
 }
 function renderTabs() {
   const ok = S.stocks.filter((s) => s.status === 'ok').length;
-  $('tabs').innerHTML = S.stocks.map((s) => `<button class="${S.tab === s.code ? 'active' : ''}" data-tab="${esc(s.code)}">${esc(s.name)}</button>`).join('')
+  $('tabs').innerHTML = (INDEX ? `<button class="${S.tab === 'market' ? 'active' : ''}" data-tab="market">📊 市場總覽</button>` : '') + S.stocks.map((s) => `<button class="${S.tab === s.code ? 'active' : ''}" data-tab="${esc(s.code)}">${esc(s.name)}</button>`).join('')
     + (S.stocks.length >= 2 ? `<button class="${S.tab === 'compare' ? 'active' : ''}" data-tab="compare" ${ok < 2 ? 'disabled title="至少需兩檔載入完成"' : ''}>⇄ 多股比較</button>` : '');
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !b.disabled) { S.tab = b.dataset.tab; S.kw = null; render(); } };
 }
@@ -377,7 +417,9 @@ function artHTML(a) {
   const sc = a.scores || {}, lab = a.sentiment;
   const confBar = `<div class="conf" title="正面 ${Math.round((sc.pos || 0) * 100)}% / 中性 ${Math.round((sc.neu || 0) * 100)}% / 負面 ${Math.round((sc.neg || 0) * 100)}%">${['pos', 'neu', 'neg'].map((k) => `<span style="width:${(sc[k] || 0) * 100}%;background:${SENT[k].color}"></span>`).join('')}</div>`;
   let why;
-  if (a.evidence && a.evidence.length) {
+  if (a.evidencePending) {
+    why = `<div class="evi"><div class="evi-h">⏳ 正在讀取內文、逐句找出判斷依據…</div><ol><li>「${markHits(a.title, a.hints)}」<span class="badge ${lab}">標題 ${SENT[lab].name}</span></li></ol></div>`;
+  } else if (a.evidence && a.evidence.length) {
     why = `<div class="evi"><div class="evi-h">判斷依據：從內文 ${a.nSentences} 句中，最能代表「${SENT[lab].name}」的句子</div><ol>${a.evidence.map((e) => `<li>「${markHits(e.text, e.hits)}」<span class="badge ${e.label}">${SENT[e.label].name} ${Math.round(e.p * 100)}%</span></li>`).join('')}</ol>
       <div class="evi-f">整篇判定：${SENT[lab].name} ${Math.round((sc[lab] || 0) * 100)}%（標題 40%＋內文各句平均 60%）· ${a.model === 'finbert' ? 'FinBERT' : '字典法'}</div></div>`;
   } else {
@@ -390,6 +432,33 @@ function artHTML(a) {
     ${why}${confBar}</div>`;
 }
 
+// 資料完整度：舊新聞是一週一週補抓的，還沒補到的日期要標示出來，避免看起來像「那幾天沒新聞」
+function coverageStart(d) {
+  if (d.mode === 'live') return null;
+  const bf = new Set(d.backfill || []), ref = refDate(d);
+  let m = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - ((ref.getDay() + 6) % 7));
+  let start = dkey(m);
+  for (;;) { m = new Date(m.getTime() - 7 * DAY); const k = dkey(m); if (!bf.has(k)) break; start = k; }
+  return start;
+}
+function dataNotes(st, d, a) {
+  const notes = [], live = st.source === 'live';
+  const why = {
+    'Google 新聞': '彙整多家媒體的主要管道', 'Yahoo 股市': '個股新聞', '鉅亨網': '財經新聞', 'PTT': '散戶討論', '股價': '股價資料',
+  };
+  (d.errors || []).forEach((e) => {
+    const src = e.split('：')[0];
+    notes.push(live
+      ? `<b>${esc(src)}</b>（${why[src] || '資料來源'}）這次沒抓到：免費公共轉址服務暫時失效或額度用完。約 1 分鐘後按下方「重新抓取」通常就能補上。`
+      : `<b>${esc(src)}</b> 在最近一次自動更新時沒抓到，已保留先前的資料，下次自動更新（每天約 08:17、18:17）會再試。`);
+  });
+  if (!a.total) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
+  else if (a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
+  if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔的資料，因此技術指標與部分評分無法計算。');
+  if (!notes.length) return '';
+  return `<section class="panel box nodata" style="margin-bottom:12px"><h4>ℹ️ 資料說明 <small>為什麼有些資料沒有出現</small></h4><ul class="adv-list">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>${live && (d.errors || []).length ? `<button class="secondary" onclick="retry('${esc(st.code)}', true)">重新抓取</button>` : ''}</section>`;
+}
+
 function renderStock(v, st) {
   const d = st.data, a = analyze(d, S.days), q = d.quote || {}, val = d.valuation || {}, t = a.tech, sc = a.score;
   const adv = adviceText(a);
@@ -398,16 +467,18 @@ function renderStock(v, st) {
   v.innerHTML = `
   <section class="panel stock-head">
     <div>
-      <h3>${esc(d.name)}<small>${esc(d.code)} · ${d.market === 'TPEx' ? '上櫃' : '上市'}</small></h3>
+      <h3>${esc(d.name)}<small>${esc(d.code)} · ${d.market === 'TPEx' ? '上櫃' : '上市'}${st.etf ? ' · ETF' : st.industry ? ' · ' + esc(st.industry) : ''}</small></h3>
       <div class="price-line">${q.price != null ? `<span class="price">${fmt(q.price, 2)}</span>${chgHTML(q.change, q.changePct)}` : '<span class="meta-small">無股價資料</span>'}</div>
       <div class="meta-small">${q.source ? `股價來源：${esc(q.source)}${q.time ? ' · ' + esc(String(q.time).slice(0, 16).replace('T', ' ')) : ''}` : ''}　情緒模型：${esc(d.model)}　資料：${esc(srcNote)}</div>
-      ${d.errors && d.errors.length ? `<div class="err-line">${st.source === 'live' ? '部分來源未取得' : '最近一次更新時部分來源未取得'}：${esc(d.errors.join('；'))}${st.source === 'live' ? '' : '（已保留先前資料）'}</div>` : ''}
+
     </div>
     <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
       <div class="val-grid"><div><span>本益比</span><b>${fmt(val.pe, 1)}</b></div><div><span>殖利率</span><b>${val.yield != null ? fmt(val.yield, 2) + '%' : '—'}</b></div><div><span>股價淨值比</span><b>${fmt(val.pb, 2)}</b></div></div>
       <button class="secondary" id="exportBtn">匯出分析摘要</button>
     </div>
   </section>
+
+  ${dataNotes(st, d, a)}
 
   <div class="cards">
     <div class="metric"><div class="label">總聲量</div><div class="value">${fmt(a.total)}</div><div class="hint">${pvol == null ? `近 ${a.days} 天文章數` : `較前期 ${pct(pvol, 0)}`}</div></div>
@@ -421,6 +492,7 @@ function renderStock(v, st) {
   <div class="grid g21">
     <section class="panel box">
       <h4>聲量與情緒趨勢 <small>每日文章數，依情緒堆疊</small></h4>
+      ${(() => { const cs = coverageStart(d); if (st.source === 'live') return '<p class="cov-note">即時抓取只能取得各來源「最新」約 100 篇文章，較早日期的文章數會偏少（不是那幾天沒有新聞）。★ 追蹤股票有完整的每日歷史。</p>'; if (cs && cs > a.dates[0]) return `<p class="cov-note">灰底區（${md(cs)} 以前）的舊新聞仍在逐週補抓中，文章數偏少不代表沒有新聞；每次自動更新都會補齊更多。</p>`; return ''; })()}
       <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
       <div class="chart md"><canvas id="cVolume"></canvas></div>
       <h4 style="margin-top:14px">同期間收盤價 <small>與上圖日期對齊；虛線為 20 日均線</small></h4>
@@ -451,9 +523,11 @@ function renderStock(v, st) {
   </div>
 
   <div class="grid g2">
-    <section class="panel box"><h4>正面熱門文章 Top 5</h4><p class="rank-note">${a.topPos.basis}</p>${a.topPos.list.map((x) => artHTML(x)).join('') || '<p class="sub">期間內沒有正面文章</p>'}</section>
-    <section class="panel box"><h4>負面熱門文章 Top 5</h4><p class="rank-note">${a.topNeg.basis}</p>${a.topNeg.list.map((x) => artHTML(x)).join('') || '<p class="sub">期間內沒有負面文章</p>'}</section>
+    <section class="panel box" id="topPos">${topHTML(a, 'pos')}</section>
+    <section class="panel box" id="topNeg">${topHTML(a, 'neg')}</section>
   </div>
+
+  ${esgHTML(a)}
 
   <section class="panel box" style="margin-bottom:12px">
     <h4>投資分析與建議 <small>規則式評分：情緒 30%、價格趨勢 25%、估值 15%、情緒動能 10%、RSI 10%、波動 10%</small></h4>
@@ -506,7 +580,10 @@ function renderStock(v, st) {
 
   // ---- 圖表
   const labels = a.dates.map(md);
+  const cs = coverageStart(d), csIdx = cs && cs > a.dates[0] ? a.dates.findIndex((k) => k >= cs) : -1;
+  const shade = { id: 'cov', beforeDatasetsDraw(c) { if (csIdx <= 0) return; const { ctx, chartArea: r, scales: { x } } = c; const xe = (x.getPixelForValue(csIdx - 1) + x.getPixelForValue(csIdx)) / 2; ctx.save(); ctx.fillStyle = 'rgba(20,33,61,0.06)'; ctx.fillRect(r.left, r.top, xe - r.left, r.bottom - r.top); ctx.fillStyle = '#8a92a3'; ctx.font = '11px sans-serif'; ctx.fillText('舊新聞補抓中', r.left + 6, r.top + 12); ctx.restore(); } };
   chart('cVolume', {
+    plugins: [shade],
     type: 'bar',
     data: { labels, datasets: ['pos', 'neu', 'neg'].map((k) => ({ label: SENT[k].name, data: a.dates.map((x) => a.daily[x][k]), backgroundColor: SENT[k].color, borderColor: '#fff', borderWidth: { top: 1 }, borderRadius: 2, maxBarThickness: 22 })) },
     options: { interaction: { mode: 'index', intersect: false }, scales: { x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 10 } }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: '篇' } } },
@@ -593,6 +670,7 @@ function exportReport(a, adv) {
     `綜合評分：${a.score.total ?? "—"} / 100（${a.score.rating}）`, ...a.score.factors.map((f) => `  - ${f.name}（${f.w}%）：${f.s ?? '—'} 分，${f.note}`), '',
     '分析：', ...adv.out.map((x) => '  - ' + x.replace(/<[^>]+>/g, '')), '建議：' + adv.action.replace(/<[^>]+>/g, ''),
     ...(adv.risks.length ? ['風險：', ...adv.risks.map((x) => '  - ' + x)] : []), '',
+    `ESG：${a.esg.any} 篇涉及（E ${a.esg.esg.E.n}／S ${a.esg.esg.S.n}／G ${a.esg.esg.G.n}）　前瞻性陳述：${a.esg.fls.yes.n} 篇，淨情緒 ${netOf(a.esg.fls.yes) == null ? '—' : netOf(a.esg.fls.yes).toFixed(0)}（現況描述 ${netOf(a.esg.fls.no) == null ? '—' : netOf(a.esg.fls.no).toFixed(0)}）`, '',
     '正面熱門文章：', ...a.topPos.list.map((x) => `  - ${x.title}（${x.source}）${x.url}`),
     '負面熱門文章：', ...a.topNeg.list.map((x) => `  - ${x.title}（${x.source}）${x.url}`), '',
     '提醒：本報告為文字與價格分析輔助，不構成投資建議。',
@@ -693,6 +771,171 @@ function compareAdvice(r) {
   if (bear.length) s += `${bear.map(n).join('、')} 負面訊號較多，持有者應檢視是否需要減碼或設定停損；`;
   s += `分散投資可降低單一公司消息面風險，建議單一個股不超過可投資資金的 20～30%，並搭配自身風險承受度調整。`;
   return s;
+}
+
+// ------------------------------------------------------------------ 熱門文章區塊（可單獨更新）
+function topHTML(a, lab) {
+  const t = lab === 'pos' ? a.topPos : a.topNeg, pend = t.list.filter((x) => x.evidencePending).length;
+  return `<h4>${lab === 'pos' ? '正面' : '負面'}熱門文章 Top 5 ${pend ? `<small>⏳ 判斷依據分析中（剩 ${pend} 篇）</small>` : ''}</h4><p class="rank-note">${t.basis}</p>`
+    + (t.list.map((x) => artHTML(x)).join('') || `<p class="sub">期間內沒有${lab === 'pos' ? '正面' : '負面'}文章</p>`);
+}
+function refreshTop(st) {
+  if (!$('topPos') || !st.data) return;
+  const a = analyze(st.data, S.days);
+  $('topPos').innerHTML = topHTML(a, 'pos'); $('topNeg').innerHTML = topHTML(a, 'neg');
+}
+
+// ------------------------------------------------------------------ ESG 與前瞻性陳述
+const ESG_WORDS = {
+  E: ['ESG', '永續', '淨零', '碳排', '減碳', '碳中和', '碳費', '碳權', '碳盤查', '再生能源', '綠電', '太陽能', '風電', '節能', '節電', '環保', '氣候', '溫室氣體', '污染', '汙染', '廢棄物', '廢水', '水資源', '循環經濟', '綠色'],
+  S: ['員工', '勞工', '加薪', '調薪', '裁員', '職安', '工安', '人權', '性別', '社會責任', '公益', '捐贈', '消費者', '食安', '罷工', '薪資', '福利', '傷亡', '人才', '培訓', '社區', '童工', '職災'],
+  G: ['董事會', '公司治理', '治理', '內控', '稽核', '掏空', '弊案', '違約', '裁罰', '罰款', '罰鍰', '訴訟', '經營權', '股東會', '獨立董事', '獨董', '內線', '財報不實', '會計師', '資訊揭露', '背信', '董事長', '接班', '庫藏股'],
+};
+const ESG_NAME = { E: '環境 E', S: '社會 S', G: '治理 G' };
+const FLS_RE = /(預計|(?<!優於|低於|不如|超乎|符合|高於|超出|不及)預期|預估|展望|可望|有望|將(會|於|持續|擴|推|進|再|可|在)|計畫|規劃|目標|未來|明年|下半年|下季|下一季|估計|預料|力拼|後市)/g;
+const artTexts = (a) => [a.title, a.summary || '', ...((a.evidence || []).map((e) => e.text))].join('。');
+
+function esgAnalyze(cur) {
+  const esg = { E: { n: 0, pos: 0, neu: 0, neg: 0, words: {}, arts: [] }, S: { n: 0, pos: 0, neu: 0, neg: 0, words: {}, arts: [] }, G: { n: 0, pos: 0, neu: 0, neg: 0, words: {}, arts: [] } };
+  let any = 0;
+  const fls = { yes: { n: 0, pos: 0, neu: 0, neg: 0 }, no: { n: 0, pos: 0, neu: 0, neg: 0 }, samples: [] };
+  cur.forEach((a) => {
+    const txt = artTexts(a); let hit = false;
+    for (const k of ['E', 'S', 'G']) {
+      const ws = ESG_WORDS[k].filter((w) => txt.includes(w));
+      if (ws.length) { hit = true; const g = esg[k]; g.n++; g[a.sentiment]++; ws.forEach((w) => (g.words[w] = (g.words[w] || 0) + 1)); if (g.arts.length < 3) g.arts.push(a); }
+    }
+    if (hit) any++;
+    const isF = FLS_RE.test(txt); FLS_RE.lastIndex = 0;
+    const b = isF ? fls.yes : fls.no; b.n++; b[a.sentiment]++;
+    if (isF && fls.samples.length < 5) {
+      const sents = [a.title, ...((a.evidence || []).map((e) => e.text))];
+      const s = sents.find((x) => { const r = FLS_RE.test(x); FLS_RE.lastIndex = 0; return r; });
+      if (s && !fls.samples.some((x) => x.text === s)) fls.samples.push({ text: s, a });
+    }
+  });
+  return { esg, any, fls };
+}
+const netOf = (g) => (g.n ? ((g.pos - g.neg) / g.n) * 100 : null);
+function flsMark(text) { return esc(text).replace(FLS_RE, (m) => `<em class="f">${m}</em>`); }
+
+function esgHTML(a) {
+  const { esg, any, fls } = a.esg;
+  const maxN = Math.max(1, ...['E', 'S', 'G'].map((k) => esg[k].n));
+  const fy = netOf(fls.yes), fn = netOf(fls.no);
+  const verdict = fy == null || fn == null || fls.yes.n < 3 ? '前瞻性陳述數量不足，暫不比較。'
+    : fy - fn > 10 ? `談到<b>未來</b>的文章比描述<b>現況</b>的更樂觀（淨情緒 ${fy.toFixed(0)} vs ${fn.toFixed(0)}）：市場對後市有期待，但需留意期待是否落空。`
+    : fy - fn < -10 ? `談到<b>未來</b>的文章比描述<b>現況</b>的更保守（淨情緒 ${fy.toFixed(0)} vs ${fn.toFixed(0)}）：現況尚可，但對後市有疑慮。`
+    : `對未來與現況的看法差不多（淨情緒 ${fy.toFixed(0)} vs ${fn.toFixed(0)}）。`;
+  return `<div class="grid g2">
+    <section class="panel box">
+      <h4>ESG 議題分析 <small>${a.total ? `${any} 篇（${Math.round((any / a.total) * 100)}%）涉及 ESG` : ''}</small></h4>
+      <p class="sub">FinBERT 論文指出模型也能辨識 ESG 討論。作者的 FinBERT-ESG 只有英文版，本站以中文 ESG 詞庫分類，情緒沿用 FinBERT 判斷。</p>
+      ${['E', 'S', 'G'].map((k) => { const g = esg[k], n = netOf(g); return `<div class="hbar" style="grid-template-columns:70px 1fr 92px"><span><b>${ESG_NAME[k]}</b></span><div class="track" style="max-width:${(g.n / maxN) * 100}%">${g.n ? segBar(g, g.n) : ''}</div><b>${g.n} 篇${n == null ? '' : `・${n > 0 ? '+' : ''}${n.toFixed(0)}`}</b></div>`; }).join('')}
+      <div class="word-list" style="margin:10px 0 4px">${['E', 'S', 'G'].flatMap((k) => Object.entries(esg[k].words).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([w, c]) => `<span>${k}・${esc(w)}<b>${c}</b></span>`)).join('') || '<span>期間內沒有 ESG 相關文章</span>'}</div>
+      ${['E', 'S', 'G'].flatMap((k) => esg[k].arts.slice(0, 2).map((x) => `<div class="mini-art"><span class="badge ${x.sentiment}">${SENT[x.sentiment].name}</span><span class="esg-tag">${k}</span><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a><small>${esc(x.source)}</small></div>`)).join('')}
+    </section>
+    <section class="panel box">
+      <h4>前瞻性陳述分析 <small>${a.total ? `${fls.yes.n} 篇（${Math.round((fls.yes.n / a.total) * 100)}%）談到未來` : ''}</small></h4>
+      <p class="sub">論文作者另有 FinBERT-FLS 模型辨識「前瞻性陳述」（對未來的預測與計畫），同樣只有英文版。本站以「預計、展望、明年、可望…」等詞辨識。</p>
+      <div class="hbar" style="grid-template-columns:92px 1fr 70px"><span><b>談未來</b></span><div class="track">${fls.yes.n ? segBar(fls.yes, fls.yes.n) : ''}</div><b>${fy == null ? '—' : (fy > 0 ? '+' : '') + fy.toFixed(0)}</b></div>
+      <div class="hbar" style="grid-template-columns:92px 1fr 70px"><span><b>描述現況</b></span><div class="track">${fls.no.n ? segBar(fls.no, fls.no.n) : ''}</div><b>${fn == null ? '—' : (fn > 0 ? '+' : '') + fn.toFixed(0)}</b></div>
+      <div class="callout" style="margin-top:8px">${verdict}</div>
+      ${fls.samples.map((x) => `<div class="mini-art"><span class="badge ${x.a.sentiment}">${SENT[x.a.sentiment].name}</span><span>「${flsMark(x.text)}」</span><small>${esc(x.a.source)}</small></div>`).join('')}
+    </section>
+  </div>`;
+}
+
+// ------------------------------------------------------------------ 市場總覽
+function heatColor(net) {
+  if (net == null) return ['#f1f3f8', '#14213d'];
+  const t = clamp(Math.abs(net) / 60, 0, 1), mix = (a, b) => '#' + [0, 2, 4].map((i) => Math.round(parseInt(a.substr(i + 1, 2), 16) * (1 - t) + parseInt(b.substr(i + 1, 2), 16) * t).toString(16).padStart(2, '0')).join('');
+  const bg = net >= 0 ? mix('#f1f3f8', '#2a78d6') : mix('#f1f3f8', '#e0601f');
+  return [bg, t > 0.5 ? '#fff' : '#14213d'];
+}
+function renderMarket(v) {
+  const list = INDEX.stocks, days = INDEX.days || [];
+  const sum = (k) => [0, 1, 2].map((i) => list.reduce((x, s) => x + (s[k] ? s[k][i] : 0), 0));
+  const c7 = sum('c7'), p7 = sum('p7'), n7 = c7[0] + c7[1] + c7[2], np7 = p7[0] + p7[1] + p7[2];
+  const net = (c) => { const n = c[0] + c[1] + c[2]; return n ? ((c[0] - c[2]) / n) * 100 : null; };
+  const mNet = net(c7), mPrev = net(p7);
+  const rows = list.map((s) => ({ ...s, n7: s.c7[0] + s.c7[1] + s.c7[2], np7: s.p7[0] + s.p7[1] + s.p7[2], net7: net(s.c7), netp7: net(s.p7) }));
+  // 產業
+  const inds = {};
+  rows.forEach((s) => { const k = s.industry || '其他'; const g = (inds[k] = inds[k] || { name: k, n: 0, c: [0, 0, 0], stocks: [] }); g.n++; g.stocks.push(s); s.c7.forEach((x, i) => (g.c[i] += x)); });
+  const indList = Object.values(inds).map((g) => ({ ...g, vol: g.c[0] + g.c[1] + g.c[2], net: net(g.c) })).sort((a, b) => b.vol - a.vol);
+  const hottest = indList[0];
+  const MIN = 3;
+  const rank = (arr, fn, desc = true) => arr.filter((s) => fn(s) != null).sort((a, b) => (desc ? fn(b) - fn(a) : fn(a) - fn(b))).slice(0, 10);
+  const rPos = rank(rows.filter((s) => s.n7 >= MIN), (s) => s.net7);
+  const rNeg = rank(rows.filter((s) => s.n7 >= MIN), (s) => s.net7, false);
+  const rBuzz = rank(rows.filter((s) => s.n7 >= MIN), (s) => s.n7 / Math.max(1, s.np7));
+  const rTurn = rank(rows.filter((s) => s.n7 >= MIN && s.np7 >= MIN), (s) => Math.abs(s.net7 - s.netp7));
+  const rowHTML = (s, val) => `<button class="rank-row" data-code="${esc(s.code)}"><span><b>${esc(s.name)}</b> <small>${esc(s.code)}</small></span><span class="rv">${val}</span></button>`;
+  const sgn = (x) => (x == null ? '—' : (x > 0 ? '+' : '') + x.toFixed(0));
+  const chg = (s) => (s.changePct == null ? '' : `<span class="chg ${s.changePct > 0 ? 'up' : s.changePct < 0 ? 'down' : 'flat'}" style="font-size:12px">${s.changePct > 0 ? '▲' : s.changePct < 0 ? '▼' : ''}${pct(s.changePct, 2)}</span>`);
+  v.innerHTML = `
+  <div class="cards">
+    <div class="metric"><div class="label">追蹤檔數</div><div class="value">${list.length}</div><div class="hint">成交值前 100＋前 10 大 ETF＋自選</div></div>
+    <div class="metric"><div class="label">近 7 日總聲量</div><div class="value">${fmt(n7)}</div><div class="hint">${np7 ? `較前 7 日 ${pct((n7 / np7 - 1) * 100, 0)}` : '篇'}</div></div>
+    <div class="metric"><div class="label">市場淨情緒</div><div class="value">${sgn(mNet)}</div><div class="hint">${mPrev == null ? '近 7 日' : `前 7 日 ${sgn(mPrev)}`}</div></div>
+    <div class="metric"><div class="label">正面佔比</div><div class="value" style="color:${SENT.pos.color}">${n7 ? Math.round((c7[0] / n7) * 100) + '%' : '—'}</div><div class="hint">${c7[0]} 篇</div></div>
+    <div class="metric"><div class="label">負面佔比</div><div class="value" style="color:#c4521f">${n7 ? Math.round((c7[2] / n7) * 100) + '%' : '—'}</div><div class="hint">${c7[2]} 篇</div></div>
+    <div class="metric feature"><div class="label">最熱門產業</div><div class="value" style="font-size:22px">${hottest ? esc(hottest.name) : '—'}</div><div class="hint">${hottest ? `${hottest.vol} 篇・淨情緒 ${sgn(hottest.net)}` : ''}</div></div>
+  </div>
+
+  <section class="panel box" style="margin-bottom:12px">
+    <h4>產業情緒熱力圖 <small>近 7 日；顏色＝淨情緒（藍正面、橘負面），點方塊看產業內個股</small></h4>
+    <div class="heat">${indList.map((g) => { const [bg, fg] = heatColor(g.net); return `<button class="heat-tile" data-ind="${esc(g.name)}" style="background:${bg};color:${fg};flex-grow:${Math.max(1, Math.sqrt(g.vol))}"><b>${esc(g.name)}</b><span>${g.n} 檔・${g.vol} 篇</span><span class="hn">${sgn(g.net)}</span></button>`; }).join('')}</div>
+    <div class="legend" style="margin-top:8px"><span><i class="dot" style="background:#e0601f"></i>偏負面</span><span><i class="dot" style="background:#f1f3f8;border:1px solid #ddd"></i>中性／無資料</span><span><i class="dot" style="background:#2a78d6"></i>偏正面</span></div>
+  </section>
+
+  <div class="grid g2">
+    <section class="panel box"><h4>市場每日聲量與情緒 <small>全部追蹤股票合計，近 30 天</small></h4>
+      <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
+      <div class="chart md"><canvas id="mkVol"></canvas></div></section>
+    <section class="panel box"><h4>市場淨情緒 vs 元大台灣50（0050） <small>上：每日淨情緒；下：0050 收盤價，日期對齊</small></h4>
+      <div class="chart sm"><canvas id="mkNet"></canvas></div><div class="chart sm"><canvas id="mk50"></canvas></div></section>
+  </div>
+
+  <div class="grid g2">
+    <section class="panel box rank"><h4>😀 情緒最正面 <small>近 7 日、至少 ${MIN} 篇</small></h4>${rPos.map((s) => rowHTML(s, `${sgn(s.net7)}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
+    <section class="panel box rank"><h4>😟 情緒最負面 <small>近 7 日、至少 ${MIN} 篇</small></h4>${rNeg.map((s) => rowHTML(s, `${sgn(s.net7)}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
+    <section class="panel box rank"><h4>🔥 聲量暴增 <small>近 7 日 ÷ 前 7 日</small></h4>${rBuzz.map((s) => rowHTML(s, `${s.np7 ? '×' + (s.n7 / s.np7).toFixed(1) : '新增'}・${s.n7} 篇`)).join('') || '<p class="sub">資料不足</p>'}</section>
+    <section class="panel box rank"><h4>🔄 情緒轉折 <small>近 7 日 vs 前 7 日淨情緒變化</small></h4>${rTurn.map((s) => rowHTML(s, `${sgn(s.netp7)} → ${sgn(s.net7)} ${s.net7 > s.netp7 ? '↑' : '↓'}`)).join('') || '<p class="sub">資料不足</p>'}</section>
+  </div>
+
+  <section class="panel box">
+    <h4>全部追蹤股票 <small id="mkCount"></small></h4>
+    <div class="table-tools"><select id="mkInd"><option value="">全部產業</option>${indList.map((g) => `<option>${esc(g.name)}</option>`).join('')}</select><span class="meta-small">點標題排序、點列加入健檢</span></div>
+    <div class="tbl-wrap"><table class="data" id="mkTable"><thead><tr>${[['code', '代號'], ['name', '名稱'], ['industry', '產業'], ['price', '股價', 1], ['changePct', '漲跌', 1], ['n7', '7日聲量', 1], ['net7', '淨情緒', 1], ['ret20', '20日報酬', 1]].map(([k, t, n]) => `<th class="sortable ${n ? 'num' : ''}" data-k="${k}">${t}</th>`).join('')}</tr></thead><tbody></tbody></table></div>
+  </section>`;
+
+  // 圖表
+  const lab = days.map(md);
+  const daily = days.map((_, i) => [0, 1, 2].map((j) => list.reduce((x, s) => x + (s.daily && s.daily[i] ? s.daily[i][j] : 0), 0)));
+  chart('mkVol', { type: 'bar', data: { labels: lab, datasets: ['pos', 'neu', 'neg'].map((k, j) => ({ label: SENT[k].name, data: daily.map((d) => d[j]), backgroundColor: SENT[k].color, borderColor: '#fff', borderWidth: { top: 1 }, borderRadius: 2 })) },
+    options: { interaction: { mode: 'index', intersect: false }, scales: { x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 10 } }, y: { stacked: true, beginAtZero: true, title: { display: true, text: '篇' } } } } });
+  chart('mkNet', { type: 'line', data: { labels: lab, datasets: [{ label: '淨情緒', data: daily.map((d) => { const n = d[0] + d[1] + d[2]; return n ? +(((d[0] - d[2]) / n) * 100).toFixed(1) : null; }), borderColor: '#14213d', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, spanGaps: true, tension: 0.25 }] },
+    options: { interaction: { mode: 'index', intersect: false }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } }, y: { title: { display: true, text: '淨情緒' }, grid: { color: (c) => (c.tick.value === 0 ? '#c9cfdb' : '#eef1f6') } } } } });
+  fetch('data/p/0050.json').then((r) => r.json()).then((j) => {
+    const m = Object.fromEntries(j.d.map((d, i) => [d, j.c[i]]));
+    chart('mk50', { type: 'line', data: { labels: lab, datasets: [{ label: '0050 收盤', data: days.map((d) => m[d] ?? null), borderColor: SERIES[2], borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, spanGaps: true }] },
+      options: { interaction: { mode: 'index', intersect: false }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } }, y: { title: { display: true, text: '元' } } } } });
+  }).catch(() => {});
+
+  // 表格
+  let sortK = 'n7', desc = true, ind = '';
+  const draw = () => {
+    const r = rows.filter((s) => !ind || (s.industry || '其他') === ind).sort((a, b) => { const x = a[sortK], y = b[sortK]; return (typeof x === 'string' ? String(x).localeCompare(y) : (x ?? -1e9) - (y ?? -1e9)) * (desc ? -1 : 1); });
+    $('mkCount').textContent = `${r.length} 檔`;
+    $('mkTable').querySelector('tbody').innerHTML = r.map((s) => `<tr class="click" data-code="${esc(s.code)}"><td>${esc(s.code)}</td><td><b>${esc(s.name)}</b>${s.auto ? '' : ' <small style="color:var(--muted)">自選</small>'}</td><td>${esc(s.industry || '')}</td><td class="num">${fmt(s.price, 2)}</td><td class="num">${chg(s)}</td><td class="num">${s.n7}</td><td class="num">${sgn(s.net7)}</td><td class="num">${pct(s.ret20)}</td></tr>`).join('');
+  };
+  $('mkTable').querySelector('thead').onclick = (e) => { const th = e.target.closest('th'); if (!th) return; if (sortK === th.dataset.k) desc = !desc; else { sortK = th.dataset.k; desc = true; } draw(); };
+  $('mkInd').onchange = (e) => { ind = e.target.value; draw(); };
+  v.querySelectorAll('.heat-tile').forEach((b) => (b.onclick = () => { ind = b.dataset.ind; $('mkInd').value = ind; draw(); $('mkTable').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+  v.onclick = (e) => { const r = e.target.closest('[data-code]'); if (r) addStock(r.dataset.code); };
+  draw();
 }
 
 window.removeStock = removeStock;

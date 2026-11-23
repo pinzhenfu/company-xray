@@ -5,27 +5,53 @@
  */
 'use strict';
 window.XLive = (() => {
+  // 公共轉址服務與各自的次數限制（每分鐘）。程式會記錄用量、自動避開額度用完或失效的服務
   const PROXIES = [
-    (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-    (u) => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u),
-    (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    { name: 'codetabs', perMin: 120, url: (u) => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u) },
+    { name: 'cors.lol', perMin: 28, url: (u) => 'https://api.cors.lol/?url=' + encodeURIComponent(u) },
+    { name: 'allorigins', perMin: 18, url: (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) },
+    { name: 'whateverorigin', perMin: 18, json: 'contents', url: (u) => 'https://whateverorigin.org/get?url=' + encodeURIComponent(u) },
+    { name: 'corsproxy', perMin: 25, url: (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u) },
   ];
-  let best = 0;   // 上一次成功的轉址服務先試
-
-  async function fetchText(url, check, ms = 15000) {
-    let lastErr;
-    for (let k = 0; k < PROXIES.length; k++) {
-      const i = (best + k) % PROXIES.length;
-      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
-      try {
-        const r = await fetch(PROXIES[i](url), { signal: ctl.signal });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const txt = await r.text();
-        if (check && !check(txt)) throw new Error('內容不正確');
-        best = i; return txt;
-      } catch (e) { lastErr = e; } finally { clearTimeout(t); }
-    }
-    throw lastErr || new Error('轉址服務皆失敗');
+  const ST = {};   // 每個服務：最近一分鐘的使用時間、冷卻到何時、成功分數
+  try { Object.assign(ST, JSON.parse(localStorage.getItem('xray-proxy') || '{}')); } catch (e) {}
+  PROXIES.forEach((p) => { ST[p.name] = Object.assign({ used: [], cool: 0, score: 0 }, ST[p.name] || {}); ST[p.name].used = []; });
+  const saveST = () => { try { localStorage.setItem('xray-proxy', JSON.stringify(Object.fromEntries(Object.entries(ST).map(([k, v]) => [k, { score: v.score, cool: v.cool }])))); } catch (e) {} };
+  function available() {
+    const now = Date.now();
+    return PROXIES.filter((p) => { const s = ST[p.name]; s.used = s.used.filter((t) => now - t < 60000); return s.cool < now && s.used.length < p.perMin; })
+      .sort((a, b) => ST[b.name].score - ST[a.name].score);
+  }
+  async function tryProxy(p, url, check, signal) {
+    ST[p.name].used.push(Date.now());
+    const r = await fetch(p.url(url), { signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    let txt = await r.text();
+    if (p.json) txt = JSON.parse(txt)[p.json] || '';
+    if (check && !check(txt)) throw new Error('內容不正確');
+    return txt;
+  }
+  // 「避險請求」：先用最可靠的服務，2.5 秒沒回應就同時再開下一個，誰先回來用誰
+  async function fetchText(url, check, ms = 12000) {
+    const cands = available().slice(0, 3);
+    if (!cands.length) throw new Error('轉址服務額度暫時用完，請 1 分鐘後再試');
+    const ctls = [];
+    return await new Promise((resolve, reject) => {
+      let done = false, failed = 0, started = 0;
+      const finish = (fn, v) => { if (!done) { done = true; ctls.forEach((c) => c.abort()); clearTimeout(timer); saveST(); fn(v); } };
+      const timer = setTimeout(() => finish(reject, new Error('逾時')), ms);
+      const start = () => {
+        if (done || started >= cands.length) return;
+        const p = cands[started++], ctl = new AbortController(); ctls.push(ctl);
+        tryProxy(p, url, check, ctl.signal).then((txt) => { ST[p.name].score += 1; finish(resolve, txt); }).catch((e) => {
+          if (done) return;
+          ST[p.name].score -= 2; if (!/內容/.test(e.message)) ST[p.name].cool = Date.now() + 45000;
+          if (++failed >= cands.length) finish(reject, e); else start();
+        });
+        setTimeout(start, 2500);
+      };
+      start();
+    });
   }
   const fetchJSON = async (url, ms) => JSON.parse(await fetchText(url, (t) => /^\s*[{[]/.test(t), ms));
 
@@ -125,14 +151,15 @@ window.XLive = (() => {
   async function googleNews(name, code, days) {
     const base = name !== code ? `"${name}"` : `${code} 股票`;
     const qs = [`${base} when:${days}d`, `${base} (${FIN_SITES.map((s) => 'site:' + s).join(' OR ')}) when:${days}d`];
-    const res = await Promise.allSettled(qs.map((q) => fetchText('https://news.google.com/rss/search?q=' + encodeURIComponent(q) + '&hl=zh-TW&gl=TW&ceid=TW:zh-Hant', isRSS)));
-    const out = res.filter((r) => r.status === 'fulfilled').flatMap((r) => parseRSS(r.value, 'g', ''));
-    if (!out.length && res.every((r) => r.status === 'rejected')) throw new Error('Google 新聞');
+    const get = (q) => fetchText('https://news.google.com/rss/search?q=' + encodeURIComponent(q) + '&hl=zh-TW&gl=TW&ceid=TW:zh-Hant', isRSS).then((x) => parseRSS(x, 'g', ''));
+    let out = [];
+    try { out = await get(qs[0]); } catch (e) {}
+    if (out.length < 8) { try { out = out.concat(await get(qs[1])); } catch (e) { if (!out.length) throw e; } }
     return out;
   }
-  async function yahooNews(code, days) {
+  async function yahooNews(code, days, market) {
     const since = Date.now() - days * 864e5;
-    for (const sym of [code + '.TW', code + '.TWO']) {
+    for (const sym of market === 'TPEx' ? [code + '.TWO', code + '.TW'] : [code + '.TW', code + '.TWO']) {
       try { const items = parseRSS(await fetchText('https://tw.stock.yahoo.com/rss?s=' + sym, isRSS), 'y', 'Yahoo股市').filter((a) => new Date(a.date) >= since); if (items.length) return items; } catch (e) {}
     }
     throw new Error('Yahoo 股市');
@@ -149,7 +176,7 @@ window.XLive = (() => {
   }
   async function ptt(name, days) {
     const out = [], now = new Date(), since = Date.now() - days * 864e5;
-    for (let p = 1; p <= 2; p++) {
+    for (let p = 1; p <= 1; p++) {
       const html = await fetchText(`https://www.ptt.cc/bbs/Stock/search?page=${p}&q=${encodeURIComponent(name)}`, (t) => t.includes('r-ent') || t.includes('沒有'));
       const doc = new DOMParser().parseFromString(html, 'text/html'), rows = doc.querySelectorAll('div.r-ent');
       if (!rows.length) break;
@@ -168,8 +195,16 @@ window.XLive = (() => {
     }
     return out;
   }
-  async function prices(code) {
-    for (const [suf, mk] of [['.TW', 'TWSE'], ['.TWO', 'TPEx']]) {
+  async function ownPrices(code) {
+    const r = await fetch('data/p/' + code + '.json'); if (!r.ok) throw new Error('no file');
+    const j = await r.json(), rows = j.d.map((d, i) => ({ d, o: j.o[i], h: j.h[i], l: j.l[i], c: j.c[i], v: j.v[i] }));
+    const price = j.p || rows.at(-1).c, prev = rows.length > 1 ? rows.at(-2).c : price;
+    return { rows, market: j.m, quote: { price, prevClose: prev, change: Math.round((price - prev) * 100) / 100, changePct: prev ? Math.round(((price - prev) / prev) * 10000) / 100 : 0, time: j.t ? new Date(j.t * 1000).toISOString() : rows.at(-1).d, source: 'Yahoo Finance（每日更新）' } };
+  }
+  async function prices(code, market) {
+    try { return await ownPrices(code); } catch (e) {}
+    const order = market === 'TPEx' ? [['.TWO', 'TPEx'], ['.TW', 'TWSE']] : [['.TW', 'TWSE'], ['.TWO', 'TPEx']];
+    for (const [suf, mk] of order) {
       try {
         const j = await fetchJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${code}${suf}?range=1y&interval=1d`);
         const res = j.chart.result[0], q = res.indicators.quote[0], rows = [];
@@ -188,17 +223,27 @@ window.XLive = (() => {
     return { pe: num(v.pe), yield: num(v.yield), pb: num(v.pb) };
   }
 
-  // ---------------------------------------------------------------- 主流程
+  // ---------------------------------------------------------------- 主流程（兩階段：先出結果，再補判斷依據）
+  const CACHE_KEY = (code) => 'xray-live-' + code;
+  function cacheGet(code) { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY(code)) || 'null'); return c && Date.now() - c.t < 12 * 3600e3 ? c.d : null; } catch (e) { return null; } }
+  function cachePut(code, d) {
+    try {
+      const keys = Object.keys(localStorage).filter((k) => k.startsWith('xray-live-'));
+      if (keys.length >= 8) keys.map((k) => [k, JSON.parse(localStorage.getItem(k)).t]).sort((a, b) => a[1] - b[1]).slice(0, keys.length - 7).forEach(([k]) => localStorage.removeItem(k));
+      localStorage.setItem(CACHE_KEY(code), JSON.stringify({ t: Date.now(), d }));
+    } catch (e) {}
+  }
   async function collect(stock, progress = () => {}) {
     await loadMedia();
+    const cached = cacheGet(stock.code);
+    if (cached) { cached.fromCache = true; return cached; }
     const days = 90, errors = [];
-    progress('正在透過公共轉址服務抓取新聞、PTT 與股價…');
-    const settle = (p, label) => p.catch((e) => { errors.push(label + '：無法取得'); return null; });
+    progress('正在抓取新聞、PTT 與股價…');
+    const settle = (p, label) => p.catch(() => { errors.push(label + '：無法取得'); return null; });
     const [g, y, cn, pt, pr, val] = await Promise.all([
-      settle(googleNews(stock.name, stock.code, days), 'Google 新聞'), settle(yahooNews(stock.code, days), 'Yahoo 股市'),
-      settle(cnyesNews(stock.name, days), '鉅亨網'), settle(ptt(stock.name, days), 'PTT'), settle(prices(stock.code), '股價'), valuation(stock.code),
+      settle(googleNews(stock.name, stock.code, days), 'Google 新聞'), settle(yahooNews(stock.code, days, stock.market), 'Yahoo 股市'),
+      settle(cnyesNews(stock.name, days), '鉅亨網'), settle(ptt(stock.name, days), 'PTT'), settle(prices(stock.code, stock.market), '股價'), valuation(stock.code),
     ]);
-    // 去重：同標題留可直接開啟的版本
     const seen = new Set(), all = [];
     [...(cn || []), ...(y || []), ...(g || []), ...(pt || [])].sort((a, b) => (a.url.includes('news.google.com') - b.url.includes('news.google.com'))).forEach((a) => {
       const k = a.title.replace(/[\s\p{P}\p{S}_]+/gu, '').slice(0, 40); if (k && !seen.has(k)) { seen.add(k); all.push(a); }
@@ -206,20 +251,33 @@ window.XLive = (() => {
     all.sort((a, b) => (a.date < b.date ? 1 : -1));
     const exclude = [stock.name, stock.code, stock.name.slice(0, 2)];
     all.forEach((a) => { const t = (a.title + '。' + a.summary).slice(0, 300), d = dictScore(t); Object.assign(a, { scores: d.probs, sentiment: labelOf(d.probs), dictSentiment: labelOf(d.probs), hints: d.hits, keywords: keywords(t, exclude), model: 'dict' }); });
-    // 正負面最新各 6 篇抓內文、逐句分析
-    const since30 = Date.now() - 30 * 864e5, todo = [];
-    ['pos', 'neg'].forEach((lab) => todo.push(...all.filter((a) => a.sentiment === lab && new Date(a.date) >= since30 && !a.url.includes('news.google.com')).slice(0, 6)));
-    if (todo.length) {
-      progress(`正在讀取 ${todo.length} 篇熱門文章內文，逐句找出判斷依據…`);
-      const texts = await Promise.all(todo.map(articleText));
-      todo.forEach((a, i) => analyzeBody(a, splitSentences(texts[i])));
-    }
-    if (!all.length && !pr) throw new Error('所有來源都抓不到（' + errors.join('、') + '）。公共轉址服務可能暫時失效，請稍後再試');
-    return {
+    if (!all.length && !pr) throw new Error('新聞與股價都抓不到（' + errors.join('、') + '）。公共轉址服務可能暫時失效或額度用完，請 1 分鐘後按重試');
+    // 標記要補抓內文的文章：正負面最新各 5 篇（就是畫面上的熱門文章）
+    ['pos', 'neg'].forEach((lab) => all.filter((a) => a.sentiment === lab).slice(0, 5).forEach((a) => { if (!a.url.includes('news.google.com')) a.evidencePending = true; }));
+    const d = {
       code: stock.code, name: stock.name, market: pr ? pr.market : stock.market, articles: all,
       prices: pr ? pr.rows : [], quote: pr ? pr.quote : {}, valuation: val, errors,
       model: '金融字典法（即時抓取，非 FinBERT）', days, fetchedAt: new Date().toISOString(), mode: 'live',
     };
+    if (!all.some((a) => a.evidencePending)) cachePut(stock.code, d);
+    return d;
   }
-  return { collect, canon, loadMedia };
+  // 第二階段：一次 2 篇，抓內文逐句分析，每完成一篇就通知畫面更新
+  async function fetchEvidence(d, onUpdate = () => {}) {
+    const todo = d.articles.filter((a) => a.evidencePending);
+    let i = 0;
+    const worker = async () => {
+      while (i < todo.length) {
+        const a = todo[i++];
+        const text = await articleText(a);
+        analyzeBody(a, splitSentences(text));
+        delete a.evidencePending;
+        onUpdate(a);
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    cachePut(d.code, d);
+  }
+  const clearCache = (code) => { try { localStorage.removeItem(CACHE_KEY(code)); } catch (e) {} };
+  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache };
 })();

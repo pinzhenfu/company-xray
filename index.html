@@ -34,9 +34,11 @@
         <button data-days="7">近 7 天</button><button data-days="30" class="active">近 30 天</button><button data-days="90">近 90 天</button>
       </div>
       <button class="primary" id="addBtn">開始健檢</button>
+      <button class="cmp-btn" id="cmpBtn">⇄ 多股比較</button>
     </div>
+    <div class="cmp-panel" id="cmpPanel"></div>
     <div class="chips" id="chips"></div>
-    <p class="hint-line" id="hintLine">最多可同時加入 4 檔股票進行比較。按 Enter 加入；點標籤上的 × 移除。可查詢全部上市櫃股票；★ 追蹤清單由 GitHub 上的 watchlist.txt 決定。</p>
+    <p class="hint-line" id="hintLine">最多可同時加入 4 檔股票進行比較。按 Enter 加入；點標籤上的 × 移除。可查詢全部上市櫃股票與 ETF；★ 追蹤清單＝成交值前 100 大＋前 10 大 ETF＋watchlist.txt 自選。</p>
   </section>
 
   <nav class="tabs" id="tabs"></nav>
