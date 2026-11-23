@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import market
 import sentiment
 import sources
 
@@ -115,43 +116,71 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
 async def main():
     OUT.joinpath("s").mkdir(parents=True, exist_ok=True)
     now = datetime.now(sources.TW)
-    wl = read_watchlist()
-    print(f"追蹤 {len(wl)} 檔，等待 FinBERT 載入…")
+    auto_top, auto_etf = int(os.getenv("AUTO_TOP", "100")), int(os.getenv("AUTO_ETF", "10"))
+
+    # 追蹤清單 = watchlist.txt ＋ 當日成交值前 N 大個股 ＋ 前 M 大 ETF
+    all_list = await sources.stock_list()
+    by_code = {s["code"]: s for s in all_list}
+    manual = read_watchlist()
+    ranked = sorted(all_list, key=lambda s: s.get("value", 0), reverse=True)
+    top_stocks = [s["code"] for s in ranked if s["type"] == "股票" and s.get("value")][:auto_top]
+    top_etfs = [s["code"] for s in ranked if s["type"] == "ETF" and s.get("value")][:auto_etf]
+    tracked: dict[str, dict] = {}
+    for code, name in manual:
+        tracked[code] = {"name": name, "auto": False}
+    for code in top_stocks + top_etfs:
+        tracked.setdefault(code, {"name": None, "auto": True})
+    print(f"追蹤 {len(tracked)} 檔（手動 {len(manual)}、熱門個股 {len(top_stocks)}、熱門 ETF {len(top_etfs)}），等待 FinBERT 載入…")
+
     ok = await asyncio.to_thread(sentiment.finbert.wait, float(os.getenv("MODEL_WAIT", "900")))
     print("情緒模型：", "FinBERT" if ok else f"字典法（{sentiment.finbert.error}）")
+    inds = await market.industries()
+    print(f"產業分類：{len(inds)} 檔")
+
+    def entry(d, info):
+        s = by_code.get(d["code"], {})
+        return {"code": d["code"], "name": d["name"], "market": d["market"],
+                "type": "ETF" if sources.ETF_RE.match(d["code"]) else "股票",
+                "industry": "ETF" if sources.ETF_RE.match(d["code"]) else inds.get(d["code"], "其他"),
+                "auto": info["auto"], "articles": len(d["articles"]),
+                "price": d["quote"].get("price"), "changePct": d["quote"].get("changePct"),
+                "value": s.get("value", 0), **market.summarize(d, now)}
+
     index = []
-    for code, name in wl:
+    for code, info in tracked.items():
         try:
-            d = await update_one(code, name, now)
+            d = await update_one(code, info["name"], now)
         except Exception as e:  # 單一股票失敗不影響其他
             print(f"  ✗ {code}：{type(e).__name__} {e}")
             d = None
-        if d:
-            index.append({"code": d["code"], "name": d["name"], "market": d["market"],
-                          "articles": len(d["articles"]), "price": d["quote"].get("price"),
-                          "changePct": d["quote"].get("changePct")})
-        await asyncio.sleep(1.5)  # 對資料來源客氣一點
-    # 保留這次失敗、但以前有資料的股票
-    have = {s["code"] for s in index}
-    for code, _ in wl:
         p = OUT / "s" / f"{code}.json"
-        if code not in have and p.exists():
+        if not d and p.exists():  # 這次失敗但以前有資料
             d = json.loads(p.read_text(encoding="utf-8"))
-            index.append({"code": d["code"], "name": d["name"], "market": d["market"], "articles": len(d["articles"]),
-                          "price": d["quote"].get("price"), "changePct": d["quote"].get("changePct")})
+        if d:
+            index.append(entry(d, info))
+        await asyncio.sleep(1.0)  # 對資料來源客氣一點
+
+    # 不再追蹤的舊檔案刪掉，避免網站顯示過期資料
+    for p in (OUT / "s").glob("*.json"):
+        if p.stem not in tracked:
+            p.unlink()
+
+    days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
     (OUT / "index.json").write_text(json.dumps({
         "updatedAt": now.isoformat(timespec="seconds"),
         "model": "FinBERT（yiyanghkust/finbert-tone-chinese）" if ok else "金融字典法（FinBERT 未載入）",
-        "stocks": index,
-    }, ensure_ascii=False, indent=1), encoding="utf-8")
-    # 全市場股票清單與估值：讓網頁可以搜尋全部台股、即時抓取時也有本益比
-    all_list = await sources.stock_list()
+        "days": days, "stocks": index,
+    }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+    # 全市場股票清單（含 ETF、產業）、估值、每檔股價：讓網頁可以搜尋全部台股，非追蹤股的股價也能秒開
     (OUT / "all_stocks.json").write_text(json.dumps(
-        [{"c": s["code"], "n": s["name"], "m": "O" if s.get("market") == "TPEx" else "L"} for s in all_list],
-        ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        [{"c": s["code"], "n": s["name"], "m": "O" if s.get("market") == "TPEx" else "L",
+          "t": "E" if s["type"] == "ETF" else "S", "i": "ETF" if s["type"] == "ETF" else inds.get(s["code"], "")}
+         for s in all_list], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     vals = await sources.all_valuations()
     (OUT / "valuation.json").write_text(json.dumps(vals, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"完成：{len(index)} 檔寫入 {OUT}；全市場清單 {len(all_list)} 檔、估值 {len(vals)} 檔")
+    n_price = await market.price_files([s["code"] for s in all_list], OUT / "p") if os.getenv("PRICE_FILES", "1") == "1" else 0
+    print(f"完成：追蹤 {len(index)} 檔；全市場清單 {len(all_list)} 檔、估值 {len(vals)} 檔、股價檔 {n_price} 檔")
 
 
 if __name__ == "__main__":

@@ -62,28 +62,40 @@ def _fallback_stocks() -> list[dict]:
         return []
 
 
+STOCK_RE = re.compile(r"^\d{4}$")              # 一般股票（排除權證、特別股等）
+ETF_RE = re.compile(r"^00\d{2,4}[A-Z]?$")        # ETF（如 0050、00878、00679B）
+
+
+def _num(x) -> float:
+    try:
+        return float(str(x).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def stock_list() -> list[dict]:
-    """上市（TWSE）＋上櫃（TPEx）完整清單，一天更新一次；抓不到就用內建熱門清單。"""
+    """上市（TWSE）＋上櫃（TPEx）股票與 ETF 清單（排除權證），附當日成交值供排序熱門股。"""
     if _stock_cache["list"] and time.time() - _stock_cache["t"] < 86400:
         return _stock_cache["list"]
-    merged: dict[str, dict] = {s["code"]: s for s in _fallback_stocks()}
+    merged: dict[str, dict] = {}
+    for s in _fallback_stocks():
+        merged[s["code"]] = {**s, "type": "ETF" if ETF_RE.match(s["code"]) else "股票", "value": 0}
     async with client() as c:
-        try:
-            r = await c.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL")
-            for row in r.json():
-                code, name = row.get("Code"), row.get("Name")
-                if code and name:
-                    merged[code] = {"code": code, "name": name.strip(), "market": "TWSE"}
-        except Exception:
-            pass
-        try:
-            r = await c.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes")
-            for row in r.json():
-                code, name = row.get("SecuritiesCompanyCode"), row.get("CompanyName")
-                if code and name:
-                    merged[code] = {"code": code, "name": name.strip(), "market": "TPEx"}
-        except Exception:
-            pass
+        for url, mk, kc, kn, kv, kp, kch in (
+            ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name", "TradeValue", "ClosingPrice", "Change"),
+            ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEx", "SecuritiesCompanyCode", "CompanyName", "TransactionAmount", "Close", "Change"),
+        ):
+            try:
+                r = await c.get(url)
+                for row in r.json():
+                    code, name = (row.get(kc) or "").strip(), (row.get(kn) or "").strip()
+                    if not (code and name) or not (STOCK_RE.match(code) or ETF_RE.match(code)):
+                        continue
+                    merged[code] = {"code": code, "name": name, "market": mk,
+                                    "type": "ETF" if ETF_RE.match(code) else "股票",
+                                    "value": _num(row.get(kv)), "close": _num(row.get(kp)), "change": _num(row.get(kch))}
+            except Exception:
+                pass
     _stock_cache.update(t=time.time(), list=sorted(merged.values(), key=lambda s: s["code"]))
     return _stock_cache["list"]
 

@@ -2,8 +2,8 @@
 
 任何電腦打開網址就能用，不用安裝任何東西。**可查詢全部上市櫃股票**：
 
-- **★ 追蹤清單**（`watchlist.txt`，預設 30 檔）：GitHub 每天自動抓 24 家知名媒體新聞與 PTT 討論，用論文作者釋出的中文 FinBERT（[`yiyanghkust/finbert-tone-chinese`](https://huggingface.co/yiyanghkust/finbert-tone-chinese)）判斷情緒，並抓熱門文章內文逐句分析，秒開。
-- **其他股票**：使用者查詢時，網頁透過免費公共轉址服務即時抓取（約 20～60 秒），用金融字典法分析，同樣逐句找判斷依據。公共服務偶爾會失效，上台展示建議用追蹤清單內的股票。
+- **★ 追蹤清單**（自動追蹤當日**成交值前 100 大個股＋前 10 大 ETF**，再加上 `watchlist.txt` 自選）：GitHub 每天自動抓 24 家知名媒體新聞與 PTT 討論，用論文作者釋出的中文 FinBERT（[`yiyanghkust/finbert-tone-chinese`](https://huggingface.co/yiyanghkust/finbert-tone-chinese)）判斷情緒，並抓熱門文章內文逐句分析，秒開。
+- **其他股票（含 ETF，共約 2,000 檔）**：股價每天預先存好、秒開；新聞在查詢時透過 5 個免費公共轉址服務即時抓取（約 5～15 秒，自動分散額度、先顯示結果再補判斷依據），用金融字典法分析；查過的股票 12 小時內再查秒開。公共服務有次數限制、偶爾會失效，上台展示建議用追蹤清單內的股票。
 
 > 延伸自 Huang, Wang & Yang (2023), *FinBERT: A Large Language Model for Extracting Information from Financial Text*, Contemporary Accounting Research。
 
@@ -66,6 +66,10 @@
 
 ## 網站功能（參考 OpView 輿情網站）
 
+**市場總覽首頁**：追蹤股票合計的聲量與淨情緒、產業情緒熱力圖、市場淨情緒 vs 0050 走勢、情緒最正面／最負面／聲量暴增／情緒轉折排行榜、全部追蹤股票表
+
+**個股頁**：
+
 - **公司標頭**：股價、漲跌（紅漲綠跌）、本益比、殖利率、股價淨值比
 - **KPI**：總聲量（含較前期變化）、好感度（正／負比）、正面／負面佔比、淨情緒指數、綜合評分
 - **聲量與情緒趨勢**（每日文章數依情緒堆疊）＋對齊的收盤價走勢
@@ -75,6 +79,8 @@
 - **投資分析與建議**：六面向評分、評等、操作建議、風險提醒、停損參考
 - **近半年股價＋均線＋成交量**、12 項技術指標
 - **情緒與股價相關性**（每日淨情緒 vs 下一個交易日報酬）
+- **ESG 議題分析**：環境／社會／治理各有幾篇、情緒如何（論文指出 FinBERT 可辨識 ESG；作者的 FinBERT-ESG 只有英文版，本站以中文詞庫分類＋FinBERT 情緒）
+- **前瞻性陳述分析**：談「未來」的文章 vs 描述「現況」的文章，哪個比較樂觀（對應作者的 FinBERT-FLS 概念）
 - **全部文章表格**：可篩選，並標出「FinBERT 與字典法判斷不同」的文章（對應論文發現）
 - **多股比較**（最多 4 檔）：總表、指數化股價、每日聲量、雷達圖、淨情緒走勢、比較結論與配置建議
 - 期間切換：近 7／30／90 天；匯出分析摘要
@@ -105,7 +111,8 @@
 GitHub Actions（每天 2 次）
   update_data.py ── sources.py：Google 新聞 RSS、鉅亨網、PTT 股板、Yahoo/證交所股價、證交所/櫃買估值
                  └─ sentiment.py：FinBERT 三分類（失敗時改用字典法）＋ jieba 關鍵字
-  → 寫入 site/data/index.json、site/data/s/{代號}.json（與舊資料合併，保留 120 天）
+  market.py ── 產業分類、全部股票股價檔 site/data/p/{代號}.json、市場總覽摘要
+  → 寫入 site/data/（與舊資料合併，保留 120 天）；資料另存在 data 分支（只留最新一份，專案不會越變越大）
   → 部署 site/ 到 GitHub Pages
 
 使用者瀏覽器
@@ -134,7 +141,8 @@ GitHub Actions（每天 2 次）
 | `site/` | 網站本體（index.html、style.css、app.js、live.js、media.json、chart.umd.min.js）；`site/data/` 由自動更新產生 |
 | `update_data.py` | 每日更新主程式 |
 | `sources.py` | 新聞、PTT、股價、估值爬取 |
-| `sentiment.py` | FinBERT、字典法、關鍵字 |
+| `sentiment.py` | FinBERT、字典法、關鍵字、逐句分析 |
+| `market.py` | 產業分類、全市場股價檔、市場總覽摘要 |
 | `watchlist.txt` | 追蹤清單 |
 | `stocks.json` | 內建股票代號對照表（備用） |
 | `requirements.txt` | Python 套件 |

@@ -1,0 +1,87 @@
+name: 每日更新資料並部署網站
+
+on:
+  schedule:
+    - cron: "17 0 * * *"    # 台灣時間 08:17
+    - cron: "17 10 * * *"   # 台灣時間 18:17（收盤後）
+  workflow_dispatch:         # 可在 Actions 分頁手動按「Run workflow」
+  push:
+    branches: [main]
+    paths-ignore: ["site/data/**"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update-and-deploy
+  cancel-in-progress: false
+
+env:
+  AUTO_TOP: "100"   # 自動追蹤成交值前幾大個股
+  AUTO_ETF: "10"    # 自動追蹤成交值前幾大 ETF
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安裝套件
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: 快取 FinBERT 模型
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: finbert-tone-chinese-v1
+
+      - name: 取回上次的資料（存在 data 分支）
+        run: |
+          if git fetch origin data --depth=1 2>/dev/null; then
+            mkdir -p site/data
+            git archive FETCH_HEAD | tar -x -C site/data
+            echo "已取回上次資料"
+          else
+            echo "第一次執行，沒有舊資料"
+          fi
+
+      - name: 抓資料、跑 FinBERT
+        run: python update_data.py
+
+      - name: 把資料存到 data 分支（只保留最新一份，專案不會越來越大）
+        run: |
+          cd site/data
+          printf 'p/\n' > .gitignore
+          git init -q
+          git checkout -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "資料更新 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
+          rm -rf .git
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
