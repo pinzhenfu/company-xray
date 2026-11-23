@@ -379,7 +379,7 @@ function render() {
     v.innerHTML = `<div class="panel box nodata"><h4>暫時抓不到「${esc(st.name)}」（${esc(st.code)}）的資料</h4>
       <p class="sub">${esc(st.error)}</p>
       <ul class="adv-list">
-        <li><b>最常見原因：免費公共轉址服務暫時失效或額度用完。</b>非追蹤股票的新聞要透過第三方免費服務抓取，這些服務每分鐘有次數限制，連續查很多檔就容易用完。<b>等約 1 分鐘後按「重新抓取」</b>通常就能恢復。</li>
+        <li><b>最常見原因：暫時連不上新聞與股價來源。</b>不在追蹤清單的股票，網站要透過免費的第三方連線服務即時抓取，這類服務偶爾會沒有回應。請稍後再按「重新抓取」。</li>
         <li>請確認代號是否正確（例如 2330、0050）。已下市或剛上市的股票可能沒有資料。</li>
         <li>想立即查看：首頁「📊 市場總覽」裡的 ★ 追蹤股票（成交值前 100 大＋前 10 大 ETF）資料已預先抓好，不受影響、可秒開。</li>
       </ul>
@@ -388,7 +388,17 @@ function render() {
   }
   renderStock(v, st);
 }
-window.retry = (code, fresh) => { const s = S.stocks.find((x) => x.code === code); if (!s) return; if (fresh) { delete LIVE_CACHE[code]; XLive.clearCache(code); } s.t0 = null; load(s); };
+window.retry = async (code, fresh) => {
+  const s = S.stocks.find((x) => x.code === code); if (!s) return;
+  if (fresh) { delete LIVE_CACHE[code]; XLive.clearCache(code); XLive.resetProxies(); }   // 手動重試：清掉快取，也讓所有連線服務重新嘗試
+  const before = s.data ? s.data.articles.length : 0;
+  s.t0 = null;
+  await load(s);
+  if (s.status === 'ok') {
+    const nErr = (s.data.errors || []).length, after = s.data.articles.length;
+    toast(nErr ? `已重新抓取：${after > before ? `多抓到 ${after - before} 篇，` : ''}仍有 ${nErr} 個來源沒有回應，請稍後再試` : `重新抓取成功，共 ${after} 篇文章`);
+  } else toast('仍然連不上，請稍後再試');
+};
 
 function renderChips() {
   $('chips').innerHTML = S.stocks.map((s) => `<span class="chip ${s.status === 'loading' ? 'loading' : ''}"><i style="background:${s.color}"></i>${esc(s.name)} <small style="color:var(--muted)">${esc(s.code)}</small>${s.status === 'loading' ? ' …' : s.status === 'error' ? ' ⚠' : ''}<button aria-label="移除 ${esc(s.name)}" onclick="removeStock('${esc(s.code)}')">×</button></span>`).join('');
@@ -443,20 +453,23 @@ function coverageStart(d) {
 }
 function dataNotes(st, d, a) {
   const notes = [], live = st.source === 'live';
-  const why = {
-    'Google 新聞': '彙整多家媒體的主要管道', 'Yahoo 股市': '個股新聞', '鉅亨網': '財經新聞', 'PTT': '散戶討論', '股價': '股價資料',
-  };
-  (d.errors || []).forEach((e) => {
-    const src = e.split('：')[0];
+  const NEWS = ['Google 新聞', 'Yahoo 股市', '鉅亨網', 'PTT'];
+  const failed = (d.errors || []).map((e) => e.split('：')[0]);
+  const failedNews = failed.filter((x) => NEWS.includes(x));
+  const allNewsFailed = failedNews.length === NEWS.length;
+  if (live && allNewsFailed) {
+    notes.push(`<b>這次沒有連上新聞來源</b>（${failedNews.join('、')}），所以目前看不到「${esc(d.name)}」的新聞——<b>這不代表沒有相關新聞</b>。不在追蹤清單的股票，網站要透過免費的第三方連線服務即時抓新聞，這類服務偶爾會沒有回應。股價與技術分析不受影響（每天預先存好）。建議稍後再按「重新抓取」，或先看 ★ 追蹤清單內的股票（新聞每天預先抓好）。`);
+  } else if (failedNews.length) {
     notes.push(live
-      ? `<b>${esc(src)}</b>（${why[src] || '資料來源'}）這次沒抓到：免費公共轉址服務暫時失效或額度用完。約 1 分鐘後按下方「重新抓取」通常就能補上。`
-      : `<b>${esc(src)}</b> 在最近一次自動更新時沒抓到，已保留先前的資料，下次自動更新（每天約 08:17、18:17）會再試。`);
-  });
-  if (!a.total) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
-  else if (a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
-  if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔的資料，因此技術指標與部分評分無法計算。');
+      ? `以下來源這次沒有回應：<b>${failedNews.join('、')}</b>。其他來源的文章已正常顯示，但文章數可能比實際少。`
+      : `以下來源在最近一次自動更新時沒有回應：<b>${failedNews.join('、')}</b>。已保留先前的資料，下次自動更新（每天約 08:17、18:17）會再試。`);
+  }
+  if (failed.includes('股價') && (!d.prices || !d.prices.length)) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市、暫停交易，或 Yahoo Finance 暫時沒有提供這檔股票的資料，因此技術指標與部分評分無法計算。');
+  else if (!d.prices || !d.prices.length) notes.push('<b>沒有股價資料</b>：可能是新上市、已下市或暫停交易，因此技術指標與部分評分無法計算。');
+  if (!a.total && !allNewsFailed) notes.push(`近 ${a.days} 天內，24 家知名媒體與 PTT 股板都<b>沒有提到「${esc(d.name)}」</b>。冷門股、小型股或 ETF 常見這種情況，不代表網站故障。${a.days < 90 ? '可以改選「近 90 天」，' : ''}或參考下方的股價與技術面分析。`);
+  else if (a.total && a.total < 5) notes.push(`文章只有 ${a.total} 篇，情緒統計的代表性有限，請搭配原文判斷。`);
   if (!notes.length) return '';
-  return `<section class="panel box nodata" style="margin-bottom:12px"><h4>ℹ️ 資料說明 <small>為什麼有些資料沒有出現</small></h4><ul class="adv-list">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>${live && (d.errors || []).length ? `<button class="secondary" onclick="retry('${esc(st.code)}', true)">重新抓取</button>` : ''}</section>`;
+  return `<section class="panel box nodata" style="margin-bottom:12px"><h4>ℹ️ 資料說明 <small>為什麼有些資料沒有出現</small></h4><ul class="adv-list">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>${live && failedNews.length ? `<button class="secondary" id="retryBtn" onclick="retry('${esc(st.code)}', true)">重新抓取</button> <span class="meta-small" id="retryMsg"></span>` : ''}</section>`;
 }
 
 function renderStock(v, st) {
@@ -492,7 +505,7 @@ function renderStock(v, st) {
   <div class="grid g21">
     <section class="panel box">
       <h4>聲量與情緒趨勢 <small>每日文章數，依情緒堆疊</small></h4>
-      ${(() => { const cs = coverageStart(d); if (st.source === 'live') return '<p class="cov-note">即時抓取只能取得各來源「最新」約 100 篇文章，較早日期的文章數會偏少（不是那幾天沒有新聞）。★ 追蹤股票有完整的每日歷史。</p>'; if (cs && cs > a.dates[0]) return `<p class="cov-note">灰底區（${md(cs)} 以前）的舊新聞仍在逐週補抓中，文章數偏少不代表沒有新聞；每次自動更新都會補齊更多。</p>`; return ''; })()}
+      ${(() => { const cs = coverageStart(d); if (st.source === 'live') return '<p class="cov-note">即時抓取只能取得各來源「最新」約 100 篇文章，較早日期的文章數會偏少（不是那幾天沒有新聞）。★ 追蹤股票有完整的每日歷史。</p>'; if (cs && cs > a.dates[0]) return `<p class="cov-note">灰底區（${md(cs)} 以前）的舊新聞仍在補抓中，文章數偏少不代表沒有新聞；每次自動更新都會補齊更多。</p>`; return '<p class="sub" style="margin:2px 0 6px">每日文章來自 Google 新聞逐日歸檔；最近兩天另外加上 Yahoo 股市、鉅亨網、PTT 的即時來源，所以最新一兩天的篇數可能略多。</p>'; })()}
       <div class="legend">${['pos', 'neu', 'neg'].map((k) => `<span><i class="dot" style="background:${SENT[k].color}"></i>${SENT[k].name}</span>`).join('')}</div>
       <div class="chart md"><canvas id="cVolume"></canvas></div>
       <h4 style="margin-top:14px">同期間收盤價 <small>與上圖日期對齊；虛線為 20 日均線</small></h4>

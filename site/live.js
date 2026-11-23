@@ -34,7 +34,7 @@ window.XLive = (() => {
   // 「避險請求」：先用最可靠的服務，2.5 秒沒回應就同時再開下一個，誰先回來用誰
   async function fetchText(url, check, ms = 12000) {
     const cands = available().slice(0, 3);
-    if (!cands.length) throw new Error('轉址服務額度暫時用完，請 1 分鐘後再試');
+    if (!cands.length) throw new Error('暫時連不上新聞來源，請稍後再試');
     const ctls = [];
     return await new Promise((resolve, reject) => {
       let done = false, failed = 0, started = 0;
@@ -239,7 +239,7 @@ window.XLive = (() => {
     if (cached) { cached.fromCache = true; return cached; }
     const days = 90, errors = [];
     progress('正在抓取新聞、PTT 與股價…');
-    const settle = (p, label) => p.catch(() => { errors.push(label + '：無法取得'); return null; });
+    const settle = (p, label) => p.catch(() => { errors.push(label + '：沒有回應'); return null; });
     const [g, y, cn, pt, pr, val] = await Promise.all([
       settle(googleNews(stock.name, stock.code, days), 'Google 新聞'), settle(yahooNews(stock.code, days, stock.market), 'Yahoo 股市'),
       settle(cnyesNews(stock.name, days), '鉅亨網'), settle(ptt(stock.name, days), 'PTT'), settle(prices(stock.code, stock.market), '股價'), valuation(stock.code),
@@ -251,7 +251,7 @@ window.XLive = (() => {
     all.sort((a, b) => (a.date < b.date ? 1 : -1));
     const exclude = [stock.name, stock.code, stock.name.slice(0, 2)];
     all.forEach((a) => { const t = (a.title + '。' + a.summary).slice(0, 300), d = dictScore(t); Object.assign(a, { scores: d.probs, sentiment: labelOf(d.probs), dictSentiment: labelOf(d.probs), hints: d.hits, keywords: keywords(t, exclude), model: 'dict' }); });
-    if (!all.length && !pr) throw new Error('新聞與股價都抓不到（' + errors.join('、') + '）。公共轉址服務可能暫時失效或額度用完，請 1 分鐘後按重試');
+    if (!all.length && !pr) throw new Error('新聞與股價都暫時連不上（' + errors.map((e) => e.split('：')[0]).join('、') + '）');
     // 標記要補抓內文的文章：正負面最新各 5 篇（就是畫面上的熱門文章）
     ['pos', 'neg'].forEach((lab) => all.filter((a) => a.sentiment === lab).slice(0, 5).forEach((a) => { if (!a.url.includes('news.google.com')) a.evidencePending = true; }));
     const d = {
@@ -278,6 +278,7 @@ window.XLive = (() => {
     await Promise.all([worker(), worker()]);
     cachePut(d.code, d);
   }
+  const resetProxies = () => { PROXIES.forEach((p) => { ST[p.name].cool = 0; ST[p.name].score = Math.max(ST[p.name].score, 0); }); saveST(); };
   const clearCache = (code) => { try { localStorage.removeItem(CACHE_KEY(code)); } catch (e) {} };
-  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache };
+  return { collect, fetchEvidence, canon, loadMedia, dictScore, clearCache, resetProxies };
 })();
