@@ -3,7 +3,7 @@
 任何電腦打開網址就能用，不用安裝任何東西。**可查詢全部上市櫃股票**：
 
 - **★ 追蹤清單**（自動追蹤當日**成交值前 100 大個股＋前 10 大 ETF**，再加上 `watchlist.txt` 自選）：GitHub 每天自動抓 24 家知名媒體新聞與 PTT 討論，用論文作者釋出的中文 FinBERT（[`yiyanghkust/finbert-tone-chinese`](https://huggingface.co/yiyanghkust/finbert-tone-chinese)）判斷情緒，並抓熱門文章內文逐句分析，秒開。
-- **其他股票（含 ETF，共約 2,000 檔）**：股價每天預先存好、秒開；新聞在查詢時透過 5 個免費公共轉址服務即時抓取（通常 10～30 秒，自動分散額度、先顯示結果再補判斷依據），用金融字典法分析；查過的股票 12 小時內再查秒開。公共服務有次數限制、偶爾會失效，上台展示建議用追蹤清單內的股票。
+- **其他所有股票與 ETF（約 1,900 檔）**：每天自動更新一次（Google 新聞的 24 家知名媒體標題＋FinBERT），股價每天預先存好，全部秒開。每次更新最多跑 150 分鐘，做不完的下次接著做。少數還沒輪到的股票，查詢時才會透過免費公共轉址服務即時抓取（備援）。
 
 > 延伸自 Huang, Wang & Yang (2023), *FinBERT: A Large Language Model for Extracting Information from Financial Text*, Contemporary Accounting Research。
 

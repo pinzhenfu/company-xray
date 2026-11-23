@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -177,6 +178,78 @@ async def update_one(code: str, name: str | None, now: datetime) -> dict | None:
     return data
 
 
+# ---------------------------------------------------------------- 輕量更新（非熱門股）
+LIGHT_FILE = OUT / "light.json"
+BUDGET_MIN = float(os.getenv("TIME_BUDGET_MIN", "150"))   # 整次更新最多跑幾分鐘（GitHub 上限 180 分鐘，留緩衝）
+
+
+async def update_light(stock: dict, now: datetime) -> tuple[int, int] | None:
+    path = OUT / "s" / f"{stock['code']}.json"
+    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    got = await sources.google_news_light(stock["name"], stock["code"], 4 if old else 90)
+    if got is None:
+        return None
+    known = {title_key(a["title"]) for a in old["articles"]} if old else set()
+    fresh, seen = [], set()
+    for a in got:
+        k = title_key(a["title"])
+        if k and k not in known and k not in seen:
+            seen.add(k)
+            fresh.append(a)
+    model = (await asyncio.to_thread(sentiment.analyze_articles, fresh, stock["name"], stock["code"])) if fresh else (old or {}).get("model", "")
+    for a in fresh:
+        a["model"] = "finbert" if model.startswith("FinBERT") else "dict"
+        a["lite"] = True
+    cutoff = (now - timedelta(days=KEEP_DAYS)).isoformat()
+    arts = sorted([a for a in fresh + (old["articles"] if old else []) if a["date"] >= cutoff], key=lambda a: a["date"], reverse=True)
+    path.write_text(json.dumps({
+        "code": stock["code"], "name": stock["name"], "market": stock.get("market"), "tier": "light",
+        "articles": arts, "prices": [], "quote": {}, "valuation": {}, "errors": [], "model": model or "—",
+        "days": KEEP_DAYS, "fetchedAt": now.isoformat(timespec="seconds"), "mode": "daily",
+        "backfill": [], "lightDays": 90,
+    }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return len(fresh), len(arts)
+
+
+async def light_pass(stocks: list[dict], now: datetime, t0: float) -> int:
+    state = json.loads(LIGHT_FILE.read_text(encoding="utf-8")) if LIGHT_FILE.exists() else {"stocks": {}}
+    st = state.get("stocks", {})
+    # 優先順序：從沒抓過的 → 最久沒更新的；同樣情況下成交值大的先
+    todo = sorted(stocks, key=lambda s: (s["code"] in st, st.get(s["code"], ["", 0])[0], -s.get("value", 0)))
+    todo = [s for s in todo if not (s["code"] in st and st[s["code"]][0] >= (now - timedelta(hours=20)).isoformat())]
+    deadline = t0 + BUDGET_MIN * 60
+    sem, done = asyncio.Semaphore(3), 0
+    print(f"輕量更新：待處理 {len(todo)} 檔，剩餘時間 {(deadline - time.time()) / 60:.0f} 分鐘")
+
+    async def one(s):
+        nonlocal done
+        async with sem:
+            if time.time() > deadline:
+                return
+            try:
+                r = await update_light(s, now)
+            except Exception as e:
+                print(f"  ✗ {s['code']}：{type(e).__name__}")
+                r = None
+            await asyncio.sleep(0.5)
+        if r is not None:
+            st[s["code"]] = [now.isoformat(timespec="seconds"), r[1]]
+            done += 1
+            if done % 100 == 0:
+                print(f"  …已完成 {done} 檔")
+                LIGHT_FILE.write_text(json.dumps({"updatedAt": now.isoformat(timespec="seconds"), "stocks": st}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+    await asyncio.gather(*(one(s) for s in todo))
+    valid = {s["code"] for s in stocks}
+    LIGHT_FILE.write_text(json.dumps({"updatedAt": now.isoformat(timespec="seconds"),
+                                      "stocks": {k: v for k, v in st.items() if k in valid}},
+                                     ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return done
+
+
+T0 = time.time()
+
+
 async def main():
     OUT.joinpath("s").mkdir(parents=True, exist_ok=True)
     now = datetime.now(sources.TW)
@@ -224,9 +297,10 @@ async def main():
             index.append(entry(d, info))
         await asyncio.sleep(1.0)  # 對資料來源客氣一點
 
-    # 不再追蹤的舊檔案刪掉，避免網站顯示過期資料
+    # 已下市（不在全市場清單）的舊檔案刪掉
+    valid = set(tracked) | set(by_code)
     for p in (OUT / "s").glob("*.json"):
-        if p.stem not in tracked:
+        if p.stem not in valid:
             p.unlink()
 
     days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
@@ -244,7 +318,11 @@ async def main():
     vals = await sources.all_valuations()
     (OUT / "valuation.json").write_text(json.dumps(vals, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     n_price = await market.price_files([s["code"] for s in all_list], OUT / "p") if os.getenv("PRICE_FILES", "1") == "1" else 0
-    print(f"完成：追蹤 {len(index)} 檔；全市場清單 {len(all_list)} 檔、估值 {len(vals)} 檔、股價檔 {n_price} 檔")
+    print(f"熱門股完成：追蹤 {len(index)} 檔；全市場清單 {len(all_list)} 檔、估值 {len(vals)} 檔、股價檔 {n_price} 檔")
+
+    # 其他所有股票＋ETF：輕量更新（只抓 Google 新聞標題、FinBERT 分析），在剩餘時間內做，做不完的下次接著做
+    n_light = await light_pass([s for s in all_list if s["code"] not in tracked], now, T0)
+    print(f"全部完成：輕量更新 {n_light} 檔，總耗時 {(time.time() - T0) / 60:.0f} 分鐘")
 
 
 if __name__ == "__main__":

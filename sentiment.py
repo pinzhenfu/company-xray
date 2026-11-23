@@ -117,7 +117,7 @@ class FinBert:
         with self._lock:
             for i in range(0, len(texts), batch):
                 chunk = [_t2s.convert(t) for t in texts[i: i + batch]]
-                enc = self._tok(chunk, padding=True, truncation=True, max_length=128, return_tensors="pt")
+                enc = self._tok(chunk, padding=True, truncation=True, max_length=96, return_tensors="pt")
                 with torch.no_grad():
                     probs = torch.softmax(self._model(**enc).logits, dim=-1).tolist()
                 # 標籤：0 中性、1 正面、2 負面

@@ -185,6 +185,23 @@ async def google_news(name: str, code: str, days: int) -> tuple[list[dict], str 
     return out, (err if not out else None)
 
 
+async def google_news_light(name: str, code: str, days: int) -> list[dict] | None:
+    """輕量更新用：只查一次 Google 新聞（白名單媒體）。失敗回傳 None。"""
+    base = f'"{name}"' if name != code else f"{code} 股票"
+    url = "https://news.google.com/rss/search?q=" + quote(f"{base} when:{days}d") + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    for attempt in range(3):
+        try:
+            async with client() as c:
+                r = await c.get(url)
+            if r.status_code == 429 or r.status_code >= 500:
+                raise httpx.HTTPStatusError("retry", request=r.request, response=r)
+            r.raise_for_status()
+            return _parse_rss(r.content, "g")
+        except Exception:
+            await asyncio.sleep(4 * (attempt + 1))
+    return None
+
+
 async def google_news_range(name: str, code: str, start: str, end: str) -> tuple[list[dict], int] | None:
     """回填用：抓指定日期區間的新聞（Google 一次最多約 100 篇，分週抓才不會被最新新聞擠掉）。"""
     base = f'"{name}"' if name != code else f"{code} 股票"
