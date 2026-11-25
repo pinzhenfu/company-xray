@@ -240,9 +240,9 @@ async def light_pass(stocks: list[dict], now: datetime, t0: float) -> int:
                 LIGHT_FILE.write_text(json.dumps({"updatedAt": now.isoformat(timespec="seconds"), "stocks": st}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     await asyncio.gather(*(one(s) for s in todo))
-    valid = {s["code"] for s in stocks}
+    keep = {k: v for k, v in st.items() if (OUT / "s" / f"{k}.json").exists()}   # 只依檔案是否存在，不依當次清單
     LIGHT_FILE.write_text(json.dumps({"updatedAt": now.isoformat(timespec="seconds"),
-                                      "stocks": {k: v for k, v in st.items() if k in valid}},
+                                      "stocks": keep},
                                      ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return done
 
@@ -297,11 +297,7 @@ async def main():
             index.append(entry(d, info))
         await asyncio.sleep(1.0)  # 對資料來源客氣一點
 
-    # 已下市（不在全市場清單）的舊檔案刪掉
-    valid = set(tracked) | set(by_code)
-    for p in (OUT / "s").glob("*.json"):
-        if p.stem not in valid:
-            p.unlink()
+    # 舊檔案一律保留：證交所／櫃買中心 API 偶爾沒回應，不能因此刪掉資料（已下市的檔案留著也無害）
 
     days = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
     (OUT / "index.json").write_text(json.dumps({

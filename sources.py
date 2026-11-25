@@ -73,6 +73,9 @@ def _num(x) -> float:
         return 0.0
 
 
+STOCK_LIST_COMPLETE = {"ok": False}
+
+
 async def stock_list() -> list[dict]:
     """上市（TWSE）＋上櫃（TPEx）股票與 ETF 清單（排除權證），附當日成交值供排序熱門股。"""
     if _stock_cache["list"] and time.time() - _stock_cache["t"] < 86400:
@@ -80,6 +83,7 @@ async def stock_list() -> list[dict]:
     merged: dict[str, dict] = {}
     for s in _fallback_stocks():
         merged[s["code"]] = {**s, "type": "ETF" if ETF_RE.match(s["code"]) else "股票", "value": 0}
+    ok_markets = set()
     async with client() as c:
         for url, mk, kc, kn, kv, kp, kch in (
             ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name", "TradeValue", "ClosingPrice", "Change"),
@@ -94,8 +98,21 @@ async def stock_list() -> list[dict]:
                     merged[code] = {"code": code, "name": name, "market": mk,
                                     "type": "ETF" if ETF_RE.match(code) else "股票",
                                     "value": _num(row.get(kv)), "close": _num(row.get(kp)), "change": _num(row.get(kch))}
+                    ok_markets.add(mk)
             except Exception:
                 pass
+    # 某個市場的 API 這次沒回應：沿用上一次的清單，絕不能因此把整個市場的股票當成下市
+    prev_file = Path(__file__).parent / "site" / "data" / "all_stocks.json"
+    if len(ok_markets) < 2 and prev_file.exists():
+        try:
+            for p in json.loads(prev_file.read_text(encoding="utf-8")):
+                mk = "TPEx" if p.get("m") == "O" else "TWSE"
+                if mk not in ok_markets and p["c"] not in merged:
+                    merged[p["c"]] = {"code": p["c"], "name": p["n"], "market": mk,
+                                      "type": "ETF" if p.get("t") == "E" else "股票", "value": 0}
+        except Exception:
+            pass
+    STOCK_LIST_COMPLETE["ok"] = len(ok_markets) == 2
     _stock_cache.update(t=time.time(), list=sorted(merged.values(), key=lambda s: s["code"]))
     return _stock_cache["list"]
 
